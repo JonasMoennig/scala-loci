@@ -13,7 +13,7 @@ object ConnectionSetupFactory {
 
     private def setup[S <: ConnectionSetup[_]](
         url: String, props: ConnectionSetupFactory.Properties,
-        setup: (String, String, String, Properties) => Option[S]): Option[S] =
+        setup: (String, String, String, ConnectionSetupFactory.Properties) => Option[S]): Option[S] =
       (schemes
         collectFirst (Function unlift { scheme =>
           val prefix = scheme + "://"
@@ -42,8 +42,6 @@ object ConnectionSetupFactory {
 
 sealed trait ConnectionSetupFactory[+P <: ProtocolCommon] { self =>
   val schemes: Seq[String]
-
-  type Properties
 
   def listener(url: String, props: ConnectionSetupFactory.Properties): Option[Listener[P]]
 
