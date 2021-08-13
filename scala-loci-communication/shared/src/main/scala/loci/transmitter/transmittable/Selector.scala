@@ -2,112 +2,110 @@ package loci
 package transmitter
 package transmittable
 
-import Transmittable.Delegating
 import Transmittables.{Delegates, Message}
 
 import scala.annotation.implicitNotFound
+import scala.compiletime.ops.int
 
-@implicitNotFound("Transmittable[${B}, ${I}, ${R}] not specified in: ${S}")
-sealed trait Selector[B, I, R, P, T <: Transmittables, S <: Transmittables] {
+@implicitNotFound("Transmittable.Any[${B}, ${I}, ${R}] not specified in: ${S}")
+sealed trait Selector[B, I, R, P, T <: Transmittables, S <: Transmittables]:
   def transmittable(transmittables: S): Transmittable.Aux[B, I, R, P, T]
   def context(contexts: Contexts[S]): ContextBuilder.Context[T]
   def contextBuilder(contextBuilders: ContextBuilders[S]): ContextBuilder[T]
-}
 
-object Selector {
-  implicit def message[B, I, R, P, T <: Transmittables]
-  : Selector[B, I, R, P, T, Message[Transmittable.Aux[B, I, R, P, T]]] = {
-    type S = Message[Transmittable.Aux[B, I, R, P, T]]
+object Selector:
+  type Selected[S <: Transmittables, N <: Int] = N match
+    case 0 => S match
+      case Message[t] => t
+      case Delegates[d] => d match
+        case d / t => t
+        case ? => d
+    case int.S[n] => S match
+      case Delegates[d / t] => Selected[Delegates[d], n]
 
-    new Selector[B, I, R, P, T, S] {
-      def transmittable(transmittables: S) =
-        transmittables.message
-      def context(contexts: Contexts[S]) =
-        contexts.message
-      def contextBuilder(contextBuilders: ContextBuilders[S]) =
-        contextBuilders.message
-    }
-  }
 
-  implicit def delegate[B, I, R, P, T <: Transmittables]
-  : Selector[B, I, R, P, T, Delegates[Transmittable.Aux[B, I, R, P, T]]] = {
-    type S = Delegates[Transmittable.Aux[B, I, R, P, T]]
+  final class IndexFallback[B, I, R, P, T <: Transmittables, S <: Transmittables, V]
 
-    new Selector[B, I, R, P, T, S] {
-      def transmittable(transmittables: S) =
-        transmittables.delegates
-      def context(contexts: Contexts[S]) =
-        contexts.delegate
-      def contextBuilder(contextBuilders: ContextBuilders[S]) =
-        contextBuilders.delegate
-    }
-  }
+  object IndexFallback:
+    transparent inline given message[B, I, R, P, T <: Transmittables]
+      : IndexFallback[B, I, R, P, T, Message[Transmittable.Aux[B, I, R, P, T]], Transmittable.Aux[B, I, R, P, T]] = ${ ??? }
+    transparent inline given single[B, I, R, P, T <: Transmittables]
+      : IndexFallback[B, I, R, P, T, Delegates[Transmittable.Aux[B, I, R, P, T]], Transmittable.Aux[B, I, R, P, T]] = ${ ??? }
+    transparent inline given head[B, I, R, P, T <: Transmittables, D <: Transmittable.Delegating]
+      : IndexFallback[B, I, R, P, T, Delegates[D / Transmittable.Aux[B, I, R, P, T]], Transmittable.Aux[B, I, R, P, T]] = ${ ??? }
+    transparent inline given tail[B, I, R, P, T <: Transmittables, B0, I0, R0, P0, T0 <: Transmittables, D <: Transmittable.Delegating](using
+        IndexFallback[B, I, R, P, T, Delegates[D], Transmittable.Aux[B, I, R, P, T]])
+      : IndexFallback[B, I, R, P, T, Delegates[D / Transmittable.Aux[B0, I0, R0, P0, T0]], Transmittable.Aux[B, I, R, P, T]] = ${ ??? }
 
-  implicit def head[B, I, R, P, T <: Transmittables, D <: Delegating]
-  : Selector[B, I, R, P, T, Delegates[D / Transmittable.Aux[B, I, R, P, T]]] = {
-    type S = Delegates[D / Transmittable.Aux[B, I, R, P, T]]
 
-    new Selector[B, I, R, P, T, S] {
-      def transmittable(transmittables: S) =
-        transmittables.delegates.head
-      def context(contexts: Contexts[S]) =
-        contexts.delegatesHead
-      def contextBuilder(contextBuilders: ContextBuilders[S]) =
-        contextBuilders.delegatesHead
-    }
-  }
+  sealed trait Base[B, I, R, P, T <: Transmittables, S <: Transmittables]
+    extends Selector[B, I, R, P, T, S]
 
-  implicit def tail[
-      B, I, R, P, T <: Transmittables,
-      B0, I0, R0, P0, T0 <: Transmittables, D <: Delegating](implicit
-      selector: Selector[B, I, R, P, T, Delegates[D]])
-  : Selector[B, I, R, P, T, Delegates[D / Transmittable.Aux[B0, I0, R0, P0, T0]]] = {
-    type S = Delegates[D / Transmittable.Aux[B0, I0, R0, P0, T0]]
+  sealed trait BaseFallback:
+    transparent inline given [B, I, R, P, T <: Transmittables, S <: Transmittables](using
+        IndexFallback[B, I, R, P, T, S, Transmittable.Aux[B, I, R, P, T]])
+      : Base[B, I, R, P, T, S] = ${ ??? }
 
-    new Selector[B, I, R, P, T, S] {
-      def transmittable(transmittables: S) =
-        selector transmittable transmittables.delegates.tailDelegates
-      def context(contexts: Contexts[S]) =
-        selector context contexts.delegatesTail
-      def contextBuilder(contextBuilders: ContextBuilders[S]) =
-        selector contextBuilder contextBuilders.delegatesTail
-    }
-  }
+  object Base extends BaseFallback:
+    given [B, I, R, P, T <: Transmittables, S <: Transmittables, N <: Int](using
+        SelectorResolution.Index[Message, Delegates, /, Transmittable.Any[?, ?, ?]#Base, B, S, N],
+        Selected[S, N] =:= Transmittable.Aux[B, I, R, P, T],
+        ValueOf[N])
+      : Base[B, I, R, P, T, S] = Impl(valueOf[N])
 
-  def unchecked[B, I, R, P, T <: Transmittables, D <: Delegating](index: Int) =
-    new Selector[B, I, R, P, T, Delegates[D]] {
-      def transmittable(transmittables: Delegates[D]) =
-        transmittable(transmittables, index)
-      def context(contexts: Contexts[Delegates[D]]) =
-        context(contexts, index)
-      def contextBuilder(contextBuilders: ContextBuilders[Delegates[D]]) =
-        contextBuilder(contextBuilders, index)
 
-      def transmittable[U <: Delegates[D]](transmittables: U, index: Int)
-      : Transmittable.Aux[B, I, R, P, T] = (transmittables.delegates: @unchecked) match {
-        case transmittable: Transmittable.Aux[B, I, R, P, T] @unchecked =>
-          transmittable
-        case delegates: (D / Transmittable.Aux[B, I, R, P, T]) @unchecked =>
-          if (index <= 0) delegates.head
-          else transmittable(delegates.tailDelegates, index - 1)
-      }
+  sealed trait Intermediate[B, I, R, P, T <: Transmittables, S <: Transmittables]
+    extends Selector[B, I, R, P, T, S]
 
-      def context(contexts: Contexts[Delegates[D]], index: Int)
-      : ContextBuilder.Context[T] = contexts match {
+  sealed trait IntermediateFallback:
+    transparent inline given [B, I, R, P, T <: Transmittables, S <: Transmittables](using
+        IndexFallback[B, I, R, P, T, S, Transmittable.Aux[B, I, R, P, T]])
+      : Intermediate[B, I, R, P, T, S] = ${ ??? }
+
+  object Intermediate extends IntermediateFallback:
+    given [B, I, R, P, T <: Transmittables, S <: Transmittables, N <: Int](using
+        SelectorResolution.Index[Message, Delegates, /, Transmittable.Any[?, ?, ?]#Intermediate, I, S, N],
+        Selected[S, N] =:= Transmittable.Aux[B, I, R, P, T],
+        ValueOf[N])
+      : Intermediate[B, I, R, P, T, S] = Impl(valueOf[N])
+
+
+  private class Impl[B, I, R, P, T <: Transmittables, S <: Transmittables](index: Int)
+      extends Base[B, I, R, P, T, S] with Intermediate[B, I, R, P, T, S]:
+    def transmittable(transmittables: S) = transmittable(transmittables, index)
+    def context(contexts: Contexts[S]) = context(contexts, index)
+    def contextBuilder(contextBuilders: ContextBuilders[S]) = contextBuilder(contextBuilders, index)
+
+    def transmittable(transmittables: Transmittables, index: Int): Transmittable.Aux[B, I, R, P, T] =
+      transmittables: @unchecked match
+        case transmittables: Message[Transmittable.Aux[B, I, R, P, T]] @unchecked =>
+          transmittables.message
+        case transmittables: Delegates[?] =>
+          transmittables.delegates: @unchecked match
+            case transmittable: Transmittable.Aux[B, I, R, P, T] @unchecked =>
+              transmittable
+            case delegates: (? / Transmittable.Aux[B, I, R, P, T]) @unchecked =>
+              if index <= 0 then delegates.head
+              else transmittable(delegates.tailDelegates, index - 1)
+
+    def context(contexts: Contexts[?], index: Int): ContextBuilder.Context[T] =
+      contexts: @unchecked match
+        case single: Contexts.SingleMessage[B, I, R, P, T] @unchecked =>
+          single.context
         case single: Contexts.SingleDelegate[B, I, R, P, T] @unchecked =>
           single.context
-        case list: Contexts.List[B, I, R, P, T, D] @unchecked =>
-          if (index <= 0) list.contextHead
+        case list: Contexts.List[B, I, R, P, T, ?] @unchecked =>
+          if index <= 0 then list.contextHead
           else context(list.contextTail, index - 1)
-      }
 
-      def contextBuilder(contextBuilders: ContextBuilders[Delegates[D]], index: Int)
-      : ContextBuilder[T] = contextBuilders match {
+    def contextBuilder(contextBuilders: ContextBuilders[?], index: Int): ContextBuilder[T] =
+      contextBuilders: @unchecked match
+        case single: ContextBuilders.SingleMessage[B, I, R, P, T] @unchecked =>
+          single.contextBuilder
         case single: ContextBuilders.SingleDelegate[B, I, R, P, T] @unchecked =>
           single.contextBuilder
-        case list: ContextBuilders.List[B, I, R, P, T, D] @unchecked =>
+        case list: ContextBuilders.List[B, I, R, P, T, ?] @unchecked =>
           if (index <= 0) list.contextBuilderHead
           else contextBuilder(list.contextBuilderTail, index - 1)
-      }
-    }
-}
+
+end Selector

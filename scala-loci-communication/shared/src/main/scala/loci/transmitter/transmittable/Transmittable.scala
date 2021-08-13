@@ -5,11 +5,10 @@ package transmittable
 import scala.annotation.unchecked.uncheckedVariance
 import scala.annotation.{compileTimeOnly, implicitNotFound}
 import scala.concurrent.Future
-import scala.language.experimental.macros
 import scala.util.Try
 
 
-final class /[D <: Transmittable.Delegating, T <: Transmittable.Any[_, _, _]](
+final class /[D <: Transmittable.Delegating, T <: Transmittable.Any[?, ?, ?]](
     val tail: D, val head: T) extends Transmittable.Delegating {
   def tailDelegates = new Transmittables.Delegates(tail)
 }
@@ -21,19 +20,27 @@ object Transmittables {
   final class Delegates[T <: Transmittable.Delegating](val delegates: T)
     extends AnyVal with Transmittables
 
-  final class Message[T <: Transmittable.Any[_, _, _]](val message: T)
+  final class Message[T <: Transmittable.Any[?, ?, ?]](val message: T)
     extends AnyVal with Transmittables
 
   final class None extends Transmittables
 }
 
 
-object TransmittableBase extends
-    TransmittablePrimitives with
-    TransmittableTuples with
-    TransmittableCollections {
+type Transmittable[B, I, R] = Transmittable.Resolution[B, I, R, ?, ? <: Transmittables]
+
+object Transmittable
+    extends TransmittablePrimitives
+//    with TransmittableTuples
+    with TransmittableCollections {
 
   sealed trait Delegating
+
+  type Aux[-B, I, +R, P, T <: Transmittables] = Any[B, I, R] {
+    type Proxy = P
+    type Transmittables = T
+  }
+
 
   sealed trait Any[-B, I, +R] extends Delegating {
     type Base >: B
@@ -45,64 +52,24 @@ object TransmittableBase extends
     val transmittables: Transmittables
 
     def buildIntermediate(value: Base)(
-      implicit context: Context.Providing[Transmittables]): Intermediate
+      using context: Context.Providing[Transmittables]): Intermediate
 
     def buildResult(value: Intermediate)(
-      implicit context: Context.Receiving[Transmittables]): Result
+      using context: Context.Receiving[Transmittables]): Result
 
     def buildProxy(value: Notice.Steady[Try[Intermediate]])(
-      implicit context: Context.Receiving[Transmittables]): Proxy
+      using context: Context.Receiving[Transmittables]): Proxy
   }
 
 
-  @implicitNotFound("${B} is not transmittable")
-  final class Wrapper[B, I, R, P, T <: Transmittables](
-      val transmittable: Transmittable.Aux[B, I, R, P, T]) extends AnyVal {
-    type Base = B
-    type Intermediate = I
-    type Result = R
-    type Proxy = P
-    type Transmittables = T
-    type Type = Transmittable.Aux[B, I, R, P, T]
-  }
+  def apply[T](using resolution: Resolution[T, ?, ?, ?, ?]) =
+    resolution.transmittable
 
-  sealed trait WrapperAlternation {
-    implicit def wrapperAlternation[B, I, R, P, T <: Transmittables](implicit
-      transmittable: Transmittable.Aux[B, I, R, P, T])
-    : Wrapper[B, I, R, P, T] =
-      new Wrapper(transmittable)
-  }
-
-  object Wrapper extends WrapperAlternation {
-    implicit def wrapper[B, I, R, P, T <: Transmittables](implicit
-      transmittable: Transmittable.Aux[B, I, R, P, T])
-    : Wrapper[B, I, R, P, T] =
-      new Wrapper(transmittable)
-  }
+  def Argument[T](using resolution: Resolution[T, ?, T, ?, ?]) =
+    resolution.transmittable
 
 
-  implicit def nothing: IdenticallyTransmittable[Nothing] =
-    IdenticallyTransmittable()
-
-
-  sealed trait SurrogateType[T, U, V]
-
-  object SurrogateType {
-    @compileTimeOnly("loci.transmitter.transmittable.TransmittableBase.SurrogateType is not transmittable")
-    implicit def surrogateType[T, V]: IdenticallyTransmittable[SurrogateType[T, Nothing, V]] =
-      IdenticallyTransmittable()
-  }
-
-
-  @implicitNotFound("${B} is not transmittable")
-  final class DependantValue[B, I, R, +V] private (val value: V) extends AnyVal
-
-  object DependantValue {
-    implicit def dependantValue[B, I, R, P, T <: Transmittables](implicit
-      wrapper: Wrapper[B, I, R, P, T])
-    : DependantValue[B, I, R, wrapper.Type] =
-      new DependantValue(wrapper.transmittable)
-  }
+  given nothing: IdenticallyTransmittable[Nothing] = IdenticallyTransmittable()
 
 
   @implicitNotFound("${B} is not transmittable")
@@ -112,78 +79,58 @@ object TransmittableBase extends
     def transmittable: Type = value
   }
 
-  sealed trait ResolutionFailure {
-    @compileTimeOnly("Value is not transmittable")
-    implicit def resolutionFailure[B, I, R, P, T <: Transmittables](implicit
-      dummy: DummyImplicit.Unresolvable)
-    : Resolution[B, I, R, P, T] = {
-      locally(dummy)
-      throw new NotImplementedError
-    }
+  sealed trait ResolutionAlternation {
+    given resolutionAlternation[B, I, R](using
+        transmittable: Transmittable.Any[B, I, R])
+      : Resolution[B, I, R, transmittable.Proxy, transmittable.Transmittables] =
+        Resolution(transmittable)
   }
 
-  sealed trait ResolutionDefault extends ResolutionFailure {
-    implicit def default[B, I, R, P, T <: Transmittables](implicit
-      dependant: DependantValue[B, I, R, Transmittable.Aux[B, I, R, P, T]])
-    : Resolution[B, I, R, P, T] =
-      new Resolution(dependant.value)
-  }
-
-  sealed trait ResolutionNothing extends ResolutionDefault {
-    implicit def nothing(implicit
-      dummy: DummyImplicit.Unresolvable)
-    : Resolution[Nothing, Nothing, Nothing, Future[Nothing], Transmittables.None] ={
-      locally(dummy)
-      throw new NotImplementedError
-    }
-  }
-
-  object Resolution extends ResolutionNothing {
-    implicit def macroGenerated[B, I, R, P, T <: Transmittables](implicit
-      dummy: DummyImplicit.Resolvable)
-    : Resolution[B, I, R, P, T] =
-      macro TransmittableResolution[B, I, R, P, T]
+  object Resolution extends ResolutionAlternation {
+    given resolution[B, I, R](using
+        transmittable: Transmittable.Any[B, I, R])
+      : Resolution[B, I, R, transmittable.Proxy, transmittable.Transmittables] =
+        Resolution(transmittable)
   }
 
 
   sealed trait DelegatingFailure {
-    @compileTimeOnly("Delegation is not transmittable")
-    implicit def resolutionFailure[D <: Delegating](implicit
-      dummy: DummyImplicit.Unresolvable)
-    : Delegating.Resolution[D] = {
-      locally(dummy)
-      throw new NotImplementedError
-    }
+//    @compileTimeOnly("Delegation is not transmittable")
+//    implicit def resolutionFailure[D <: Delegating](implicit
+//      dummy: DummyImplicit.Unresolvable)
+//    : Delegating.Resolution[D] = {
+//      locally(dummy)
+//      throw new NotImplementedError
+//    }
   }
 
   object Delegating extends DelegatingFailure {
-    final class Resolution[D <: Delegating](
-      val transmittables: D) extends AnyVal
+    final class Resolution[D <: Delegating](val transmittables: D) extends AnyVal
 
-    implicit def single[B, I, R, P, T <: Transmittables](implicit
-      resolution: Transmittable.Resolution[B, I, R, P, T])
-    : Resolution[Transmittable.Aux[B, I, R, P, T]] =
-      new Resolution(resolution.transmittable)
+    transparent inline given [B, I, R, P, T <: Transmittables](using
+        resolution: Transmittable.Resolution[B, I, R, P, T])
+      : Resolution[Transmittable.Aux[B, I, R, P, T]] =
+        Resolution[Transmittable.Aux[B, I, R, P, T]](resolution.transmittable)
 
-    implicit def list[B, I, R, P, T <: Transmittables, D <: Delegating](implicit
-      resolution: Transmittable.Resolution[B, I, R, P, T],
-      delegates: Resolution[D])
-    : Resolution[D / Transmittable.Aux[B, I, R, P, T]] =
-      new Resolution(new / (delegates.transmittables, resolution.transmittable))
+    transparent inline given [B, I, R, P, T <: Transmittables, D <: Delegating](using
+        resolution: Transmittable.Resolution[B, I, R, P, T],
+        delegates: Resolution[D])
+      : Resolution[D / Transmittable.Aux[B, I, R, P, T]] =
+        Resolution[D / Transmittable.Aux[B, I, R, P, T]](/(delegates.transmittables, resolution.transmittable))
   }
 }
 
 
 sealed trait IdenticallyTransmittable[B] extends Transmittable.Any[B, B, B] {
-  override type Base = B
-  override type Intermediate = B
-  override type Result = B
+  type Base = B
+  type Intermediate = B
+  type Result = B
   type Proxy = Future[B]
   type Transmittables = Transmittables.None
 }
 
 object IdenticallyTransmittable {
-  def apply[B](): IdenticallyTransmittable[B] = implementation: Impl[B]
+  inline def apply[B](): IdenticallyTransmittable[B] = implementation: Impl[B]
 
   private sealed trait Impl[-B] extends IdenticallyTransmittable[B @uncheckedVariance]
 
@@ -191,21 +138,21 @@ object IdenticallyTransmittable {
     val transmittables = new Transmittables.None
 
     def buildIntermediate(value: Base)(
-      implicit context: Context.Providing[Transmittables]) = value
+      using context: Context.Providing[Transmittables]) = value
 
     def buildResult(value: Intermediate)(
-      implicit context: Context.Receiving[Transmittables]) = value
+      using context: Context.Receiving[Transmittables]) = value
 
     def buildProxy(value: Notice.Steady[Try[Intermediate]])(
-      implicit context: Context.Receiving[Transmittables]) = value.toFutureFromTry
+      using context: Context.Receiving[Transmittables]) = value.toFutureFromTry
   }
 }
 
 
 sealed trait TransformingTransmittable[B, I, R] extends Transmittable.Any[B, I, R] {
-  override type Base = B
-  override type Intermediate = I
-  override type Result = R
+  type Base = B
+  type Intermediate = I
+  type Result = R
   type Proxy = Future[R]
   type Transmittables = Transmittables.None
 }
@@ -220,24 +167,24 @@ object TransformingTransmittable {
       val transmittables = new Transmittables.None
 
       def buildIntermediate(value: Base)(
-          implicit context: Context.Providing[Transmittables]) =
+          using context: transmittable.Context.Providing[Transmittables]) =
         provide(value, new Context(context.remote))
 
       def buildResult(value: Intermediate)(
-          implicit context: Context.Receiving[Transmittables]) =
+          using context: transmittable.Context.Receiving[Transmittables]) =
         receive(value, new Context(context.remote))
 
       def buildProxy(value: Notice.Steady[Try[Intermediate]])(
-          implicit context: Context.Receiving[Transmittables]) =
+          using context: transmittable.Context.Receiving[Transmittables]) =
         (value map { _ map buildResult }).toFutureFromTry
     }
 }
 
 
 sealed trait DelegatingTransmittable[B, I, R] extends Transmittable.Any[B, I, R] {
-  override type Base = B
-  override type Intermediate = I
-  override type Result = R
+  type Base = B
+  type Intermediate = I
+  type Result = R
   type Proxy = Future[R]
   type Transmittables = Transmittables.Delegates[Delegates]
   type Delegates <: Transmittable.Delegating
@@ -247,18 +194,18 @@ object DelegatingTransmittable {
   type Delegates[D <: Transmittable.Delegating] = Transmittables.Delegates[D]
 
   final class ProvidingContext[D <: Transmittable.Delegating] private[DelegatingTransmittable](
-      implicit context: Context.Providing[Delegates[D]]) {
+      using context: Context.Providing[Delegates[D]]) {
     val remote = context.remote
-    def delegate[B, I, R, P, T <: Transmittables](
-        value: B)(implicit selector: Selector[B, I, R, P, T, Delegates[D]]): I =
+    infix def delegate[B, I, R, P, T <: Transmittables](
+        value: B)(using selector: Selector.Base[B, I, R, P, T, Delegates[D]]): I =
       context provide value
   }
 
   final class ReceivingContext[D <: Transmittable.Delegating] private[DelegatingTransmittable](
-      implicit context: Context.Receiving[Delegates[D]]) {
+      using context: Context.Receiving[Delegates[D]]) {
     val remote = context.remote
-    def delegate[B, I, R, P, T <: Transmittables](
-        value: I)(implicit selector: Selector[B, I, R, P, T, Delegates[D]]): R =
+    infix def delegate[B, I, R, P, T <: Transmittables](
+        value: I)(using selector: Selector.Intermediate[B, I, R, P, T, Delegates[D]]): R =
       context receive value
   }
 
@@ -273,31 +220,31 @@ object DelegatingTransmittable {
       val transmittables = new Transmittables.Delegates(delegates.transmittables)
 
       def buildIntermediate(value: Base)(
-          implicit context: Context.Providing[Transmittables]) =
+          using context: Context.Providing[Transmittables]) =
         provide(value, new ProvidingContext)
 
       def buildResult(value: Intermediate)(
-          implicit context: Context.Receiving[Transmittables]) =
+          using context: Context.Receiving[Transmittables]) =
         receive(value, new ReceivingContext)
 
       def buildProxy(value: Notice.Steady[Try[Intermediate]])(
-          implicit context: Context.Receiving[Transmittables]) =
+          using context: Context.Receiving[Transmittables]) =
         (value map { _ map buildResult }).toFutureFromTry
     }
 }
 
 
 sealed trait ConnectedTransmittable[B, I, R] extends Transmittable.Any[B, I, R] {
-  override type Base = B
-  override type Intermediate = I
-  override type Result = R
+  type Base = B
+  type Intermediate = I
+  type Result = R
   type Proxy = Future[R]
   type Transmittables = Transmittables.Message[Message]
-  type Message <: Transmittable.Any[_, _, _]
+  type Message <: Transmittable.Any[?, ?, ?]
 }
 
 object ConnectedTransmittable {
-  final class Context[B, I, R, P, T <: Transmittables] private[ConnectedTransmittable] (implicit
+  final class Context[B, I, R, P, T <: Transmittables] private[ConnectedTransmittable] (using
       context: transmittable.Context[Transmittables.Message[Transmittable.Aux[B, I, R, P, T]]]) {
     val remote = context.remote
     val endpoint: Endpoint[B, R] = context.endpoint
@@ -314,25 +261,25 @@ object ConnectedTransmittable {
       val transmittables = new Transmittables.Message(message.transmittable)
 
       def buildIntermediate(value: Base)(
-          implicit context: Context.Providing[Transmittables]) =
+          using context: transmittable.Context.Providing[Transmittables]) =
         context provide provide(value, new Context)
 
       def buildResult(value: Intermediate)(
-          implicit context: Context.Receiving[Transmittables]) =
+          using context: transmittable.Context.Receiving[Transmittables]) =
         receive(context receive value, new Context)
 
       def buildProxy(value: Notice.Steady[Try[Intermediate]])(
-          implicit context: Context.Receiving[Transmittables]) =
+          using context: transmittable.Context.Receiving[Transmittables]) =
         (value map { _ map buildResult }).toFutureFromTry
     }
 
 
   sealed trait Proxy[B, I, R] extends Transmittable.Any[B, I, R] {
-    override type Base = B
-    override type Intermediate = I
-    override type Result = R
+    type Base = B
+    type Intermediate = I
+    type Result = R
     type Transmittables = Transmittables.Message[Message]
-    type Message <: Transmittable.Any[_, _, _]
+    type Message <: Transmittable.Any[?, ?, ?]
     type Internal
   }
 
@@ -352,20 +299,18 @@ object ConnectedTransmittable {
         val transmittables = new Transmittables.Message(message.transmittable)
 
         def buildIntermediate(value: Base)(
-            implicit context: Context.Providing[Transmittables]) =
+            using context: transmittable.Context.Providing[Transmittables]) =
           context provide provide(value, new Context)
 
         def buildResult(value: Intermediate)(
-            implicit context: Context.Receiving[Transmittables]) = {
-          val ctx = new Context
+            using context: transmittable.Context.Receiving[Transmittables]) =
+          val ctx = new Context[B0, I0, R0, P0, T0]
           direct(receive(context receive value, ctx), ctx)
-        }
 
         def buildProxy(value: Notice.Steady[Try[Intermediate]])(
-            implicit context: Context.Receiving[Transmittables]) = {
-          val ctx = new Context
+            using context: transmittable.Context.Receiving[Transmittables]) =
+          val ctx = new Context[B0, I0, R0, P0, T0]
           proxy(value map { _ map { value => receive(context receive value, ctx) } },  ctx)
-        }
       }
 
     def apply[B, R, P, N, B0, I0, R0, P0, T0 <: Transmittables](
@@ -384,20 +329,20 @@ object ConnectedTransmittable {
         val transmittables = new Transmittables.Message(message.transmittable)
 
         def buildIntermediate(value: Base)(
-            implicit context: Context.Providing[Transmittables]) =
+            using context: transmittable.Context.Providing[Transmittables]) =
           context provide provide(value, new Context)
 
         def buildResult(value: Intermediate)(
-            implicit context: Context.Receiving[Transmittables]) = {
-          val ctx = new Context
+            using context: transmittable.Context.Receiving[Transmittables]) = {
+          val ctx = new Context[B0, I0, R0, P0, T0]
           val inst = internal
           receive(inst, context receive value, ctx)
           direct(inst, ctx)
         }
 
         def buildProxy(value: Notice.Steady[Try[Intermediate]])(
-            implicit context: Context.Receiving[Transmittables]) = {
-          val ctx = new Context
+            using context: transmittable.Context.Receiving[Transmittables]) = {
+          val ctx = new Context[B0, I0, R0, P0, T0]
           val inst = internal
           val completion = value map { _ map { _ => () } }
           val result = proxy(inst, completion, ctx)

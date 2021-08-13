@@ -43,7 +43,8 @@ object Registry {
     def derive(name: String) =
       AbstractionRef(this.name, remote, s"$channelName:$name", channelAnchor, registry)
 
-    lazy val channel = registry.channels.obtain(channelName, channelAnchor, remote)
+    lazy val channel: Registry.Channel =
+      registry.channels.obtain(channelName, channelAnchor, remote)
 
     override def toString: String = s"$name#[channel:$channelName]$remote"
   }
@@ -58,7 +59,7 @@ object Registry {
 class Registry {
   private val connections = new Connections[Registry.Message.type]
 
-  private val channels = new Channels(createChannel, closeChannel)
+  private val channels = new Channels[Registry.Channel, RemoteRef](createChannel, closeChannel)
 
   private val bindings = new Bindings(request, respond)
 

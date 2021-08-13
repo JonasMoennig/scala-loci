@@ -106,6 +106,22 @@ val javalin = libraryDependencies +=
   "io.javalin" % "javalin" % "3.13.7"
 
 
+val copyCompiledFiles = taskKey[Unit]("Copies the compiled files from one project to another.")
+
+def copyCompiledFilesFrom(project: Project) = {
+  def copyCompiledFilesFrom(project: Project, config: Configuration) = Seq(
+    config / copyCompiledFiles := IO.copyDirectory(
+      (project / config / classDirectory).value,
+      (config / classDirectory).value,
+      overwrite = false, preserveLastModified = true, preserveExecutable = true),
+    config / copyCompiledFiles :=
+      ((config / copyCompiledFiles) dependsOn (project / config / compile)).value,
+    config / compile :=
+      ((config / compile) dependsOn (config / copyCompiledFiles)).value)
+
+  copyCompiledFilesFrom(project, Compile) ++ copyCompiledFilesFrom(project, Test)
+}
+
 lazy val loci = (project
   in file(".")
   settings ((publish / skip) := true)
@@ -149,24 +165,44 @@ lazy val lociLangJVM = lociLang.jvm
 lazy val lociLangJS = lociLang.js
 
 
+lazy val lociCommunicationPrelude = (crossProject(JSPlatform, JVMPlatform)
+  crossType CrossType.Full
+  in file("scala-loci-communication") / ".prelude"
+  settings (normalizedName := "scala-loci-communication-prelude",
+            publish / skip := true,
+            Compile / unmanagedSourceDirectories +=
+              (ThisBuild / baseDirectory).value / "scala-loci-communication" / "shared" / "src" / "main" / "scala",
+            Test / unmanagedSourceDirectories +=
+              (ThisBuild / baseDirectory).value / "scala-loci-communication" / "shared" / "src" / "test" / "scala",
+            Compile / unmanagedSources / includeFilter :=
+              "SelectorResolution.scala"))
+
+lazy val lociCommunicationPreludeJVM = lociCommunicationPrelude.jvm
+lazy val lociCommunicationPreludeJS = lociCommunicationPrelude.js
+
+
 lazy val lociCommunication = (crossProject(JSPlatform, JVMPlatform)
   crossType CrossType.Full
   in file("scala-loci-communication")
   settings (normalizedName := "scala-loci-communication",
-            Compile / unmanagedSourceDirectories +=
-                (ThisBuild / baseDirectory).value / "scala-loci-communication" / "shared" / "src" / "test" / "scala",
-            Compile / unmanagedSources / excludeFilter := {
-              val testDirectory =
-                (ThisBuild / baseDirectory).value / "scala-loci-communication" / "shared" / "src" / "test" / "scala"
-              new SimpleFileFilter(file =>
-                (file.getCanonicalPath startsWith testDirectory.getCanonicalPath) && !(file.getName startsWith "CompileTimeUtils"))
-            },
-            Compile / packageBin / mappings ~= { _ filter { case (file, _) => !(file.getName startsWith "CompileTimeUtils") } },
-            Test / unmanagedSources / excludeFilter := NothingFilter,
+//            Compile / unmanagedSourceDirectories +=
+//                (ThisBuild / baseDirectory).value / "scala-loci-communication" / "shared" / "src" / "test" / "scala",
+//            Compile / unmanagedSources / excludeFilter := {
+//              val testDirectory =
+//                (ThisBuild / baseDirectory).value / "scala-loci-communication" / "shared" / "src" / "test" / "scala"
+//              new SimpleFileFilter(file =>
+//                (file.getCanonicalPath startsWith testDirectory.getCanonicalPath) && !(file.getName startsWith "CompileTimeUtils"))
+//            },
+//            Compile / packageBin / mappings ~= { _ filter { case (file, _) => !(file.getName startsWith "CompileTimeUtils") } },
+//            Test / unmanagedSources / excludeFilter := NothingFilter,
+            Compile / unmanagedSources / excludeFilter :=
+              "SelectorResolution.scala",
             SourceGenerator.transmittableTuples,
             SourceGenerator.functionsBindingBuilder,
             SourceGenerator.functionSubjectiveBinding,
-            macrodeclaration, scribe, scalatest))
+            macrodeclaration, scribe, scalatest)
+  jvmSettings (copyCompiledFilesFrom(lociCommunicationPreludeJVM): _*)
+  jsSettings (copyCompiledFilesFrom(lociCommunicationPreludeJS): _*))
 
 lazy val lociCommunicationJVM = lociCommunication.jvm
 lazy val lociCommunicationJS = lociCommunication.js
