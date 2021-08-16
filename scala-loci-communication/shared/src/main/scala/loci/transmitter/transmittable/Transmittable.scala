@@ -5,35 +5,32 @@ package transmittable
 import scala.annotation.unchecked.uncheckedVariance
 import scala.annotation.{compileTimeOnly, implicitNotFound}
 import scala.concurrent.Future
+import scala.quoted.*
 import scala.util.Try
 
 
 final class /[D <: Transmittable.Delegating, T <: Transmittable.Any[?, ?, ?]](
-    val tail: D, val head: T) extends Transmittable.Delegating {
+  val tail: D,
+  val head: T)
+    extends Transmittable.Delegating:
   def tailDelegates = new Transmittables.Delegates(tail)
-}
 
 
 sealed trait Transmittables extends Any
 
-object Transmittables {
-  final class Delegates[T <: Transmittable.Delegating](val delegates: T)
-    extends AnyVal with Transmittables
-
-  final class Message[T <: Transmittable.Any[?, ?, ?]](val message: T)
-    extends AnyVal with Transmittables
-
+object Transmittables:
+  final class Delegates[T <: Transmittable.Delegating](val delegates: T) extends AnyVal with Transmittables
+  final class Message[T <: Transmittable.Any[?, ?, ?]](val message: T) extends AnyVal with Transmittables
   final class None extends Transmittables
-}
 
+
+sealed trait TransmittableDefaults
+  extends TransmittablePrimitives
+  with TransmittableCollections
 
 type Transmittable[B, I, R] = Transmittable.Resolution[B, I, R, ?, ? <: Transmittables]
 
-object Transmittable
-    extends TransmittablePrimitives
-//    with TransmittableTuples
-    with TransmittableCollections {
-
+object Transmittable extends TransmittableDefaults:
   sealed trait Delegating
 
   type Aux[-B, I, +R, P, T <: Transmittables] = Any[B, I, R] {
@@ -42,7 +39,7 @@ object Transmittable
   }
 
 
-  sealed trait Any[-B, I, +R] extends Delegating {
+  sealed trait Any[-B, I, +R] extends Delegating:
     type Base >: B
     type Intermediate = I
     type Result <: R
@@ -51,22 +48,14 @@ object Transmittable
 
     val transmittables: Transmittables
 
-    def buildIntermediate(value: Base)(
-      using context: Context.Providing[Transmittables]): Intermediate
-
-    def buildResult(value: Intermediate)(
-      using context: Context.Receiving[Transmittables]): Result
-
-    def buildProxy(value: Notice.Steady[Try[Intermediate]])(
-      using context: Context.Receiving[Transmittables]): Proxy
-  }
+    def buildIntermediate(value: Base)(using context: Context.Providing[Transmittables]): Intermediate
+    def buildResult(value: Intermediate)(using context: Context.Receiving[Transmittables]): Result
+    def buildProxy(value: Notice.Steady[Try[Intermediate]])(using context: Context.Receiving[Transmittables]): Proxy
 
 
-  def apply[T](using resolution: Resolution[T, ?, ?, ?, ?]) =
-    resolution.transmittable
+  def apply[T](using resolution: Resolution[T, ?, ?, ?, ?]) = resolution.transmittable
 
-  def Argument[T](using resolution: Resolution[T, ?, T, ?, ?]) =
-    resolution.transmittable
+  def Argument[T](using resolution: Resolution[T, ?, T, ?, ?]) = resolution.transmittable
 
 
   given nothing: IdenticallyTransmittable[Nothing] = IdenticallyTransmittable()
@@ -74,51 +63,47 @@ object Transmittable
 
   @implicitNotFound("${B} is not transmittable")
   final class Resolution[B, I, R, P, T <: Transmittables](
-      val value: Transmittable.Aux[B, I, R, P, T]) extends AnyVal {
+    val value: Transmittable.Aux[B, I, R, P, T])
+      extends AnyVal:
     type Type = Transmittable.Aux[B, I, R, P, T]
     def transmittable: Type = value
-  }
 
-  sealed trait ResolutionAlternation {
+  sealed trait ResolutionAlternation:
     given resolutionAlternation[B, I, R](using
         transmittable: Transmittable.Any[B, I, R])
       : Resolution[B, I, R, transmittable.Proxy, transmittable.Transmittables] =
         Resolution(transmittable)
-  }
 
-  object Resolution extends ResolutionAlternation {
+  object Resolution extends ResolutionAlternation:
     given resolution[B, I, R](using
         transmittable: Transmittable.Any[B, I, R])
       : Resolution[B, I, R, transmittable.Proxy, transmittable.Transmittables] =
         Resolution(transmittable)
-  }
 
 
-  sealed trait DelegatingFailure {
-//    @compileTimeOnly("Delegation is not transmittable")
-//    implicit def resolutionFailure[D <: Delegating](implicit
-//      dummy: DummyImplicit.Unresolvable)
-//    : Delegating.Resolution[D] = {
-//      locally(dummy)
-//      throw new NotImplementedError
-//    }
-  }
-
-  object Delegating extends DelegatingFailure {
+  object Delegating:
     final class Resolution[D <: Delegating](val transmittables: D) extends AnyVal
 
-    transparent inline given [B, I, R, P, T <: Transmittables](using
-        resolution: Transmittable.Resolution[B, I, R, P, T])
-      : Resolution[Transmittable.Aux[B, I, R, P, T]] =
-        Resolution[Transmittable.Aux[B, I, R, P, T]](resolution.transmittable)
+    inline given [D <: Delegating]: Resolution[D] = ${ apply[D] }
 
-    transparent inline given [B, I, R, P, T <: Transmittables, D <: Delegating](using
-        resolution: Transmittable.Resolution[B, I, R, P, T],
-        delegates: Resolution[D])
-      : Resolution[D / Transmittable.Aux[B, I, R, P, T]] =
-        Resolution[D / Transmittable.Aux[B, I, R, P, T]](/(delegates.transmittables, resolution.transmittable))
-  }
-}
+    def apply[D <: Delegating: Type](using Quotes) =
+      import quotes.reflect.*
+
+      def summon[T: Type]: Expr[T] =
+        Type.of[T] match
+          case '[ Transmittable.Aux[b, i, r, p, t] ] =>
+            val resolution = Expr.summon[Transmittable.Resolution[b, i, r, p, t]] getOrElse
+              report.throwError("Delegation is not transmittable")
+            '{ $resolution.transmittable }.asExprOf[T]
+
+      def resolve[D: Type]: Expr[D] =
+        Type.of[D] match
+          case '[ d / t ] => '{ /(${resolve[d]}, ${summon[t]}) }.asExprOf[D]
+          case _ => summon[D]
+
+      '{ Resolution(${resolve[D]}) }
+
+end Transmittable
 
 
 sealed trait IdenticallyTransmittable[B] extends Transmittable.Any[B, B, B] {

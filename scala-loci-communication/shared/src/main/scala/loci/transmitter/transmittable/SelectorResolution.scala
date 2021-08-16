@@ -9,20 +9,16 @@ object SelectorResolution:
 
   object Index:
     transparent inline given [M <: AnyKind, D <: AnyKind, / <: AnyKind, T, V, S, N <: Int](
-        using IndexComputation[M, D, /, T, V, S, N])
-      : Index[M, D, /, T, V, S, N] = ${ indexImpl[M, D, /, T, V, S, N] }
+      using IndexComputation[M, D, /, T, V, S, N])
+      : Index[M, D, /, T, V, S, N] = Index()
 
 
   final class IndexComputation[M <: AnyKind, D <: AnyKind, / <: AnyKind, T, V, S, -N]
 
   object IndexComputation:
     transparent inline given [M <: AnyKind, D <: AnyKind, / <: AnyKind, T, V, S]
-      : IndexComputation[M, D, /, T, V, S, ?] = ${ indexComputationImpl[M, D, /, T, V, S] }
+      : IndexComputation[M, D, /, T, V, S, Nothing] = ${ indexComputationImpl[M, D, /, T, V, S] }
 
-
-  def indexImpl[M <: AnyKind: Type, D <: AnyKind: Type, / <: AnyKind: Type, T: Type, V: Type, S: Type, N <: Int: Type](using Quotes) =
-    import quotes.reflect.*
-    '{ Index[M, D, /, T, V, S, N] }
 
   def indexComputationImpl[M <: AnyKind: Type, D <: AnyKind: Type, / <: AnyKind: Type, T: Type, V: Type, S: Type](using Quotes) =
     import quotes.reflect.*

@@ -47,11 +47,16 @@ object Selector:
       : Base[B, I, R, P, T, S] = ${ ??? }
 
   object Base extends BaseFallback:
-    given [B, I, R, P, T <: Transmittables, S <: Transmittables, N <: Int](using
-        SelectorResolution.Index[Message, Delegates, /, Transmittable.Any[?, ?, ?]#Base, B, S, N],
+    def apply[B, I, R, P, T <: Transmittables, S <: Transmittables, N <: Int](using
         Selected[S, N] =:= Transmittable.Aux[B, I, R, P, T],
         ValueOf[N])
       : Base[B, I, R, P, T, S] = Impl(valueOf[N])
+
+    transparent inline given [B, I, R, P, T <: Transmittables, S <: Transmittables, N <: Int](using
+        inline index: SelectorResolution.Index[Message, Delegates, /, Transmittable.Any[?, ?, ?]#Base, B, S, N],
+        inline selected: Selected[S, N] =:= Transmittable.Aux[B, I, R, P, T],
+        inline value: ValueOf[N])
+      : Base[B, I, R, P, T, S] = apply[B, I, R, P, T, S, N]
 
 
   sealed trait Intermediate[B, I, R, P, T <: Transmittables, S <: Transmittables]
@@ -63,11 +68,16 @@ object Selector:
       : Intermediate[B, I, R, P, T, S] = ${ ??? }
 
   object Intermediate extends IntermediateFallback:
-    given [B, I, R, P, T <: Transmittables, S <: Transmittables, N <: Int](using
-        SelectorResolution.Index[Message, Delegates, /, Transmittable.Any[?, ?, ?]#Intermediate, I, S, N],
+    def apply[B, I, R, P, T <: Transmittables, S <: Transmittables, N <: Int](using
         Selected[S, N] =:= Transmittable.Aux[B, I, R, P, T],
         ValueOf[N])
       : Intermediate[B, I, R, P, T, S] = Impl(valueOf[N])
+
+    transparent inline given [B, I, R, P, T <: Transmittables, S <: Transmittables, N <: Int](using
+        inline index: SelectorResolution.Index[Message, Delegates, /, Transmittable.Any[?, ?, ?]#Intermediate, I, S, N],
+        inline selected: Selected[S, N] =:= Transmittable.Aux[B, I, R, P, T],
+        inline value: ValueOf[N])
+      : Intermediate[B, I, R, P, T, S] = apply[B, I, R, P, T, S, N]
 
 
   private class Impl[B, I, R, P, T <: Transmittables, S <: Transmittables](index: Int)
