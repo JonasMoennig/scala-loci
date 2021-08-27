@@ -1,156 +1,65 @@
 package loci
 
 import scala.annotation.compileTimeOnly
-import scala.collection.mutable
-import scala.language.experimental.macros
-import scala.reflect.api.Position
-import scala.reflect.macros.{ParseException, TypecheckException, whitebox}
+import scala.quoted.*
 
-object CompileTimeUtils {
-  def replace(value: String, from: String, to: String): String =
-    macro replaceImpl
+object CompileTimeUtils:
+  inline def replace(inline value: String, inline from: String, inline to: String): String =
+    ${ replaceImpl('value, 'from, 'to) }
 
-  def replaceImpl(c: whitebox.Context)(value: c.Tree, from: c.Tree, to: c.Tree): c.Tree = {
-    import c.universe._
+  def replaceImpl(value: Expr[String], from: Expr[String], to: Expr[String])(using Quotes): Expr[String] =
+    Expr(value.valueOrError.replace(from.valueOrError, to.valueOrError))
 
-    (value, from, to) match {
-      case (Literal(Constant(value: String)), Literal(Constant(from: String)), Literal(Constant(to: String))) =>
-        Literal(Constant(value.replace(from, to)))
-      case _ =>
-        c.abort(c.enclosingPosition, "string literal expected")
-    }
-  }
+  inline def assertType[T](inline value: Any): Any =
+    ${ assertTypeImpl[T]('value) }
 
-  def assertType[T](value: Any): Unit =
-    macro assertTypeImpl[T]
+  def assertTypeImpl[T: Type](value: Expr[Any])(using Quotes): Expr[Unit] =
+    import quotes.reflect.*
 
-  def assertTypeImpl[T: c.WeakTypeTag](c: whitebox.Context)(value: c.Tree): c.Tree = {
-    import c.universe._
+    val tpe = value.asTerm.tpe.widenTermRefByName
 
-    val tpe = weakTypeOf[T]
-
-    if (tpe =:= value.tpe)
-      q"()"
+    if TypeRepr.of[T] =:= tpe then
+      '{ () }
     else
-      failTest(c)(s"$value has type `${value.tpe}`; type `$tpe` expected")
-  }
+      failTest(s"${value.show} has type `${tpe.show}`; type `${TypeRepr.of[T].show}` expected")
 
-  def assertExactType[T](value: Any): Unit =
-    macro assertExactTypeImpl[T]
+  inline def assertExactType[T](inline value: Any): Any =
+    ${ assertExactTypeImpl[T]('value) }
 
-  def assertExactTypeImpl[T: c.WeakTypeTag](c: whitebox.Context)(value: c.Tree): c.Tree = {
-    import c.universe._
+  def assertExactTypeImpl[T: Type](value: Expr[Any])(using Quotes): Expr[Unit] =
+    import quotes.reflect.*
 
-    val tpe = weakTypeOf[T]
+    val tpe = value.asTerm.tpe.widenTermRefByName
 
-    if (tpe == value.tpe)
-      q"()"
+    if TypeRepr.of[T] == tpe then
+      '{ () }
     else
-      failTest(c)(s"$value has type of form `${value.tpe}`; exact type `$tpe` expected")
-  }
+      failTest(s"${value.show} has type of form `${tpe.show}`; exact type `${TypeRepr.of[T].show}` expected")
 
-  def assertNoFailedAssertion(expr: String): Unit =
-    macro assertNoFailedAssertionImpl
+  inline def containsCompileTimeOnly(inline expr: Any): Boolean =
+    ${ containsCompileTimeOnlyImpl('expr) }
 
-  def assertNoFailedAssertionImpl(c: whitebox.Context)(expr: c.Tree): c.Tree = {
-    import c.universe._
+  def containsCompileTimeOnlyImpl(expr: Expr[Any])(using Quotes): Expr[Boolean] =
+    import quotes.reflect.*
 
-    val testFailedException =
-      c.mirror.staticClass(s"${termNames.ROOTPKG}.org.scalatest.exceptions.TestFailedException").asType.toType
+    val compileTimeOnlyAnnotation = TypeRepr.of[compileTimeOnly]
 
-    val messages = compileLiteralString(c)(expr) collect {
-      case tree @ Apply(Select(New(_), _), args) if tree.tpe <:< testFailedException =>
-        args match {
-          case Function(_, Apply(_, List(Literal(Constant(message: String))))) :: _ => message
-          case _ => "Assertion in compiled code failed"
-        }
+    object compileTimeOnlyAnnotationFinder extends TreeAccumulator[Boolean]:
+      def foldTree(compileTimeOnlyFound: Boolean, tree: Tree)(owner: Symbol) =
+        compileTimeOnlyFound ||
+        (tree.symbol.annotations exists { _.tpe <:< compileTimeOnlyAnnotation }) ||
+        foldOverTree(false, tree)(owner)
+
+    Expr(compileTimeOnlyAnnotationFinder.foldTree(false, expr.asTerm)(Symbol.spliceOwner))
+
+  private def failTest(message: String)(using Quotes) =
+    import quotes.reflect.*
+
+    '{
+      throw new org.scalatest.exceptions.TestFailedException(
+        _ => Some(${Expr(message)}),
+        None,
+        Left(org.scalactic.source.Position.here),
+        None,
+        Vector.empty)
     }
-
-    messages.headOption map { failTest(c)(_) } getOrElse q"()"
-  }
-
-  def abstractValuesInInstantiation(expr: String): List[String] =
-    macro abstractValuesInInstantiationImpl
-
-  def abstractValuesInInstantiationImpl(c: whitebox.Context)(expr: c.Tree): c.Tree = {
-    import c.universe._
-
-    val abstractValues = mutable.ListBuffer.empty[String]
-
-    compileLiteralString(c)(expr) foreach {
-      case New(tpt) =>
-        val values = tpt.tpe.members collect {
-          case symbol if symbol.isTerm && symbol.isAbstract =>
-            symbol.name.decodedName.toString
-        }
-        abstractValues ++= values
-
-      case _ =>
-    }
-
-    q"${abstractValues.result()}"
-  }
-
-  def containsCompileTimeOnly(expr: String): Boolean =
-    macro containsCompileTimeOnlyImpl
-
-  def containsCompileTimeOnlyImpl(c: whitebox.Context)(expr: c.Tree): c.Tree = {
-    import c.universe._
-
-    val compileTimeOnlyAnnotation = typeOf[compileTimeOnly]
-
-    val compileTimeOnlyFound =
-      compileLiteralString(c)(expr) exists {
-        case tree: RefTree =>
-          tree.symbol.annotations exists { _.tree.tpe <:< compileTimeOnlyAnnotation }
-        case _ =>
-          false
-      }
-
-    q"$compileTimeOnlyFound"
-  }
-
-  def containsValueOfType[T, U]: Boolean =
-    macro containsValueOfTypeImpl[T, U]
-
-  def containsValueOfTypeImpl[T: c.WeakTypeTag, U: c.WeakTypeTag](c: whitebox.Context): c.Tree = {
-    import c.universe._
-
-    val T = weakTypeOf[T]
-    val U = weakTypeOf[U]
-
-    q"${T.decls exists { _.info.finalResultType <:< U } }"
-  }
-
-  private def compileLiteralString(c: whitebox.Context)(tree: c.Tree) = {
-    def reportException(pos: Position, msg: String) = pos match {
-      case pos: c.universe.Position @unchecked => c.abort(pos, msg)
-      case _ => c.abort(c.enclosingPosition, msg)
-    }
-
-    import c.universe._
-
-    tree match {
-      case Literal(Constant(expr: String)) =>
-        try c.typecheck(c.parse(expr))
-        catch {
-          case e: ParseException => reportException(e.pos, e.msg)
-          case e: TypecheckException => reportException(e.pos, e.msg)
-        }
-
-      case _ =>
-        c.abort(c.enclosingPosition, "string literal expected")
-    }
-  }
-
-  private def failTest(c: whitebox.Context)(message: String) = {
-    import c.universe._
-
-    q"""throw new ${termNames.ROOTPKG}.org.scalatest.exceptions.TestFailedException(
-      _ => ${termNames.ROOTPKG}.scala.Some($message),
-      ${termNames.ROOTPKG}.scala.None,
-      ${termNames.ROOTPKG}.scala.Left(${termNames.ROOTPKG}.org.scalactic.source.Position.here),
-      ${termNames.ROOTPKG}.scala.None,
-      ${termNames.ROOTPKG}.scala.Vector.empty)"""
-  }
-}
