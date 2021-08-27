@@ -3,133 +3,51 @@ package transmitter
 package transmittable
 
 import scala.annotation.compileTimeOnly
-import scala.collection.mutable
 import scala.concurrent.Future
-import scala.language.experimental.macros
-import scala.reflect.macros.whitebox
+import scala.quoted.*
 
-trait TransmittableDummy {
-  this: TransmittableBase.type =>
-
-  @compileTimeOnly("Value is not transmittable")
-  final implicit def resolutionFailure[
-      B, I, R, P, T <: Transmittables,
-      TransmittableFallback[B, I, R, P, T <: Transmittables]]: TransmittableFallback[B, I, R, P, T]
-    = macro TransmittableResolutionFailure[B, I, R, P, T]
+trait TransmittableDummy:
+  this: TransmittableDefaults =>
 
   @compileTimeOnly("Value is not transmittable")
-  final def dummy[B, I, R, P, T <: Transmittables]: Transmittable.Aux[B, I, R, P, T]
-    = throw new NotImplementedError
-}
+  transparent inline given resolutionFailure[B, I, R, TransmittableFallback[_, _, _]](using
+      inline ev: Transmittable.Any[B, I, R] =:= TransmittableFallback[B, I, R])
+    : TransmittableFallback[B, I, R] =
+      ${ Transmittable.resolutionFailureImpl[B, I, R, TransmittableFallback[B, I, R]] }
 
-object TransmittableResolutionFailure {
-  def apply[
-      B: c.WeakTypeTag,
-      I: c.WeakTypeTag,
-      R: c.WeakTypeTag,
-      P: c.WeakTypeTag,
-      T <: Transmittables: c.WeakTypeTag](c: whitebox.Context): c.Tree = {
-    import c.universe._
+  @compileTimeOnly("Value is not transmittable")
+  final def dummy[B, I, R, P, T <: Transmittables]: Transmittable.Aux[B, I, R, P, T] =
+    throw new NotImplementedError
 
-    val B = weakTypeOf[B]
-    val I = weakTypeOf[I]
-    val R = weakTypeOf[R]
-    val P = weakTypeOf[P]
-    val T = weakTypeOf[T]
+  def resolutionFailureImpl[B: Type, I: Type, R: Type, TransmittableFallback: Type](using Quotes) =
+    import quotes.reflect.*
 
-    val none = typeOf[Transmittables.None]
-    val transmittableDummy = symbolOf[TransmittableDummy]
-    val TypeRef(futurePre, futureSym, _) = typeOf[Future[Any]]: @unchecked
-    val ExistentialType(existentialQuantified, TypeRef(pre, sym, existentialArgs)) =
-      typeOf[Transmittable.Any[_, _, _]]: @unchecked
+    val tpe = TypeRepr.of[B]
+    val symbol = tpe.typeSymbol
 
-    def originalType(tpe: Type) = tpe map {
-      case tpe @ TypeRef(_, _, List(_, original, _))
-          if tpe <:< typeOf[TransmittableBase.SurrogateType[_, _, _]] =>
-        original
-      case tpe =>
-        tpe
-    }
-
-    def originalName(tpe: Type) = {
-      val names = mutable.ListBuffer.empty[(String, String)]
-
-      val originalType = tpe map {
-        case tpe @ TypeRef(_, _, List(_, original, ConstantType(Constant(name: String))))
-            if tpe <:< typeOf[TransmittableBase.SurrogateType[_, _, _]] =>
-          if (original.toString != name) {
-            val nameType = internal.constantType(Constant(" :: <" + name + "> :: "))
-            names += nameType.toString -> name
-            nameType
-          }
-          else
-            original
-        case tpe =>
-          tpe
-      }
-
-      names.foldLeft(originalType.toString) {
-        case (originalName, (typeName, name)) =>
-          val index = originalName.indexOf(typeName)
-          if (index != -1)
-            originalName.substring(0, index) +
-            name +
-            originalName.substring(index + typeName.length)
-          else
-            originalName
-      }
-    }
-
-    def instantiatedTypeOrElse(tpe: Type, alternative: Type, alternativeSymbol: Symbol) = {
-      val symbol = tpe.typeSymbol
-      if (symbol.owner.owner == transmittableDummy)
-        alternative -> List(alternativeSymbol)
-      else
-        tpe -> List.empty
-    }
-
-    def instantiatedOriginalTypeOrElse(tpe: Type, alternative: Type, alternativeSymbol: Symbol) =
-      instantiatedTypeOrElse(originalType(tpe), alternative, alternativeSymbol)
-
-    val (typeI, _) = instantiatedTypeOrElse(I, B, NoSymbol)
-    val (typeR, _) = instantiatedTypeOrElse(R, B, NoSymbol)
-    val (typeP, _) = instantiatedTypeOrElse(P, internal.typeRef(futurePre, futureSym, List(B)), NoSymbol)
-    val (typeT, _) = instantiatedTypeOrElse(T, none, NoSymbol)
-
-    val originalB = originalType(B)
-    val nameB = originalName(B)
-    val symbolB = originalB.typeSymbol
-
-    val (args, quantified) =
-      (List(B, I, R, P, T) zip existentialQuantified zip existentialArgs).foldRight(List.empty[(Type, List[Symbol])]) {
-        case (((tpe, symbol), arg), args) =>
-          instantiatedOriginalTypeOrElse(tpe, arg, symbol) :: args
-      }.unzip
-
-    val transmittableTypeRef = internal.typeRef(pre, sym, args)
-
-    val transmittableType =
-      if (quantified.nonEmpty)
-        internal.existentialType(quantified.flatten, transmittableTypeRef)
-      else
-        transmittableTypeRef
-
-    val baseMessage = s"$nameB is not transmittable"
+    val baseMessage = s"${tpe.show} is not transmittable"
 
     val hintMessage =
-      if (symbolB.isClass && symbolB.asClass.isCaseClass) {
-        val impl = if (symbolB.isModuleClass) "case object" else "case class"
-        s"$baseMessage; you may consider defining an `IdenticallyTransmittable[$originalB]` instance for $impl ${symbolB.name}"
-      }
+      val (impl, suffix) =
+        if symbol.flags is Flags.Case then
+          if symbol.flags is Flags.Module then "case object" -> ".type" else "case class" -> ""
+        else if symbol.flags is Flags.Enum then
+          "enum" -> ""
+        else
+          "" -> ""
+
+      if impl.nonEmpty then
+        val name = if symbol.name endsWith "$" then symbol.name.dropRight(1) else symbol.name
+        s"$baseMessage; you may consider defining an `IdenticallyTransmittable[${tpe.show}$suffix]` instance for $impl $name"
       else
         baseMessage
 
-    val message = s"$hintMessage${utility.implicitHints.values(c)(transmittableType)}"
+    val message = s"$hintMessage${utility.implicitHints.values(TypeRepr.of[Transmittable.Any[B, ?, ?]])}"
 
-    q"""{
-      @${termNames.ROOTPKG}.scala.annotation.compileTimeOnly($message) def resolutionFailure() = ()
+    '{
+      @compileTimeOnly(${Expr(message)}) def resolutionFailure() = ()
       resolutionFailure()
-      ${termNames.ROOTPKG}.loci.transmitter.transmittable.TransmittableBase.dummy[$B, $typeI, $typeR, $typeP, $typeT]
-    }"""
-  }
-}
+      Transmittable.dummy[B, I, R, Future[B], Transmittables.None]
+    }.asExprOf[TransmittableFallback]
+  end resolutionFailureImpl
+end TransmittableDummy

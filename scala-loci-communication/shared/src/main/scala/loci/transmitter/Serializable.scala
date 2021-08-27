@@ -2,40 +2,36 @@ package loci
 package transmitter
 
 import scala.annotation.{compileTimeOnly, implicitNotFound}
-import scala.language.experimental.macros
-import scala.reflect.macros.whitebox
 import scala.util.Try
+import scala.quoted.*
 
 @implicitNotFound("${T} is not serializable")
-trait Serializable[T] {
+trait Serializable[T]:
   def serialize(value: T): MessageBuffer
   def deserialize(value: MessageBuffer): Try[T]
-}
 
-object Serializable {
-  @inline def apply[T](implicit serializable: Serializable[T]): Serializable[T] =
-    serializable
+object Serializable:
+  def apply[T](using serializable: Serializable[T]) = serializable
 
   @compileTimeOnly("Value is not serializable")
-  final implicit def resolutionFailure[T, SerializableFallback[T]]: SerializableFallback[T] =
-    macro SerializableResolutionFailure[T]
+  transparent inline given resolutionFailure[T, SerializableFallback[_]](using
+      inline ev: Serializable[T] =:= SerializableFallback[T])
+    : SerializableFallback[T] =
+      ${ resolutionFailureImpl[T, SerializableFallback[T]] }
 
   @compileTimeOnly("Value is not serializable")
-  final def dummy[T]: Serializable[T] = throw new NotImplementedError
-}
+  def dummy[T]: Serializable[T] = throw new NotImplementedError
 
-object SerializableResolutionFailure {
-  def apply[T: c.WeakTypeTag](c: whitebox.Context): c.Tree = {
-    import c.universe._
+  def resolutionFailureImpl[T: Type, SerializableFallback: Type](using Quotes) =
+    import quotes.reflect.*
 
-    val serializableType = weakTypeOf[Serializable[T]]
-    val tpe = serializableType.typeArgs.head
-    val message = s"$tpe is not serializable${utility.implicitHints.values(c)(serializableType)}"
+    val baseMessage = s"${TypeRepr.of[T].show} is not serializable"
+    val message = s"$baseMessage${utility.implicitHints.values(TypeRepr.of[Serializable[T]])}"
 
-    q"""{
-      @${termNames.ROOTPKG}.scala.annotation.compileTimeOnly($message) def resolutionFailure() = ()
+    '{
+      @compileTimeOnly(${Expr(message)}) def resolutionFailure() = ()
       resolutionFailure()
-      ${termNames.ROOTPKG}.loci.transmitter.Serializable.dummy[$tpe]
-    }"""
-  }
-}
+      dummy[T]
+    }.asExprOf[SerializableFallback]
+  end resolutionFailureImpl
+end Serializable
