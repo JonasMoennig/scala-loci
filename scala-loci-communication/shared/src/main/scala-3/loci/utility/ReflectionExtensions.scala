@@ -106,15 +106,7 @@ object reflectionExtensions:
       else Flags.EmptyFlags
 
     private def variancesOfSymbol(using Quotes)(symbol: quotes.reflect.Symbol) =
-      val constructor = symbol.primaryConstructor
-      if constructor.exists then
-        constructor.paramSymss match
-          case (params @ (param :: _)) :: _ if param.isTypeParam =>
-            Some(params map { param => varianceFlags(param.flags) })
-          case _ =>
-            Some(List.empty)
-      else
-        None
+      Some(symbol.memberTypes collect { case symbol if symbol.isTypeParam => varianceFlags(symbol.flags) })
 
     private val variancesOfType =
       try

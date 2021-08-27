@@ -34,12 +34,13 @@ object SelectorResolution:
     val S = TypeRepr.of[S]
 
     val (checkLow, checkHigh) =
-      transmittableMember.tree match
-        case TypeDef(_, tree: TypeTree) => tree.tpe match
-          case TypeBounds(low, hi) =>
-            (low.typeSymbol != defn.NothingClass || !hi.typeSymbol.flags.is(Flags.Covariant)) ->
-            (hi.typeSymbol != defn.AnyClass || !low.typeSymbol.flags.is(Flags.Contravariant))
-          case _ => true -> true
+      val transmittableType = TypeIdent(transmittableClass).tpe.appliedTo(
+        transmittableClass.memberTypes collect { case symbol if symbol.isTypeParam => TypeIdent(symbol).tpe })
+
+      transmittableType.memberType(transmittableMember) match
+        case TypeBounds(low, hi) =>
+          (low.typeSymbol != defn.NothingClass || !hi.typeSymbol.flags.is(Flags.Covariant)) ->
+          (hi.typeSymbol != defn.AnyClass || !low.typeSymbol.flags.is(Flags.Contravariant))
         case _ => true -> true
 
     def matchesMember(transmittable: TypeRepr) =
@@ -55,7 +56,7 @@ object SelectorResolution:
     def fail =
       val transmittableOwner = transmittableClass.owner
       val transmittableCompanion = transmittableOwner.companionModule match
-        case companion if companion != Symbol.noSymbol => companion
+        case companion if companion.exists => companion
         case _ => transmittableOwner
 
       report.throwError(
