@@ -63,46 +63,39 @@ object Transmittable extends TransmittableDefaults:
 
   @implicitNotFound("${B} is not transmittable")
   final class Resolution[B, I, R, P, T <: Transmittables](
-    val value: Transmittable.Aux[B, I, R, P, T])
-      extends AnyVal:
+    val value: Transmittable.Aux[B, I, R, P, T]) extends AnyVal:
     type Type = Transmittable.Aux[B, I, R, P, T]
     def transmittable: Type = value
 
   sealed trait ResolutionAlternation:
     given resolutionAlternation[B, I, R](using
-        transmittable: Transmittable.Any[B, I, R])
-      : Resolution[B, I, R, transmittable.Proxy, transmittable.Transmittables] =
-        Resolution(transmittable)
+      isInferredSpecificityDummyI: DummyImplicit,
+      isInferredSpecificityDummyR: DummyImplicit,
+      transmittable: Transmittable.Any[B, I, R])
+    : Resolution[B, I, R, transmittable.Proxy, transmittable.Transmittables] =
+      Resolution(transmittable)
 
-  object Resolution extends ResolutionAlternation:
+  sealed trait ResolutionDefault extends ResolutionAlternation:
     given resolution[B, I, R](using
-        transmittable: Transmittable.Any[B, I, R])
-      : Resolution[B, I, R, transmittable.Proxy, transmittable.Transmittables] =
-        Resolution(transmittable)
+      isInferredSpecificityDummyI: DummyImplicit,
+      isInferredSpecificityDummyR: DummyImplicit,
+      transmittable: Transmittable.Any[B, I, R])
+    : Resolution[B, I, R, transmittable.Proxy, transmittable.Transmittables] =
+      Resolution(transmittable)
+
+  object Resolution extends ResolutionDefault:
+    transparent inline given macroGenerated[B, I: IsInferred, R: IsInferred, P, T <: Transmittables](using
+      DummyImplicit.Resolvable)
+    : Resolution[B, I, R, P, T] =
+      ${ TransmittableResolution.optimizedTransmittableResolution[B, I, R, P, T] }
 
 
   object Delegating:
+    @implicitNotFound("Delegation is not transmittable")
     final class Resolution[D <: Delegating](val transmittables: D) extends AnyVal
 
-    inline given [D <: Delegating]: Resolution[D] = ${ apply[D] }
-
-    def apply[D <: Delegating: Type](using Quotes) =
-      import quotes.reflect.*
-
-      def summon[T: Type]: Expr[T] =
-        Type.of[T] match
-          case '[ Transmittable.Aux[b, i, r, p, t] ] =>
-            val resolution = Expr.summon[Transmittable.Resolution[b, i, r, p, t]] getOrElse
-              report.throwError("Delegation is not transmittable")
-            '{ $resolution.transmittable }.asExprOf[T]
-
-      def resolve[D: Type]: Expr[D] =
-        Type.of[D] match
-          case '[ d / t ] => '{ /(${resolve[d]}, ${summon[t]}) }.asExprOf[D]
-          case _ => summon[D]
-
-      '{ Resolution(${resolve[D]}) }
-
+    inline given [D <: Delegating]: Resolution[D] =
+      ${ TransmittableResolution.delegatingResolution[D] }
 end Transmittable
 
 

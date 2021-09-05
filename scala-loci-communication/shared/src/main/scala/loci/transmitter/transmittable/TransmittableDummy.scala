@@ -4,6 +4,7 @@ package transmittable
 
 import scala.annotation.compileTimeOnly
 import scala.concurrent.Future
+import scala.util.control.NonFatal
 import scala.quoted.*
 
 trait TransmittableDummy:
@@ -44,10 +45,21 @@ trait TransmittableDummy:
 
     val message = s"$hintMessage${utility.implicitHints.values(TypeRepr.of[Transmittable.Any[B, ?, ?]])}"
 
+    val transmittableDummy =
+      (Seq(
+          '{ Transmittable.dummy[B, B, B, Future[B], Transmittables.None] },
+          '{ Transmittable.dummy[B, I, B, Future[B], Transmittables.None] },
+          '{ Transmittable.dummy[B, B, R, Future[B], Transmittables.None] },
+          '{ Transmittable.dummy[B, I, R, Future[B], Transmittables.None] })
+        collectFirst Function.unlift { expr =>
+          try Some(expr.asExprOf[TransmittableFallback])
+          catch { case NonFatal(_) => None }
+        })
+
     '{
       @compileTimeOnly(${Expr(message)}) def resolutionFailure() = ()
       resolutionFailure()
-      Transmittable.dummy[B, I, R, Future[B], Transmittables.None]
-    }.asExprOf[TransmittableFallback]
+      ${transmittableDummy.get}
+    }
   end resolutionFailureImpl
 end TransmittableDummy

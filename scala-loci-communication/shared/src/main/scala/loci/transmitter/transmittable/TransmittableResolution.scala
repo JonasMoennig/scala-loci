@@ -2,282 +2,171 @@ package loci
 package transmitter
 package transmittable
 
-import scala.collection.mutable
-import scala.concurrent.Future
-import scala.reflect.macros.whitebox
+import scala.quoted.*
+import scala.util.DynamicVariable
 
-object TransmittableResolution {
-  def apply[
-      B: c.WeakTypeTag,
-      I: c.WeakTypeTag,
-      R: c.WeakTypeTag,
-      P: c.WeakTypeTag,
-      T: c.WeakTypeTag](c: whitebox.Context)(dummy: c.Tree): c.Tree = {
-    import c.universe._
+object TransmittableResolution:
+  private val optimizedTransmittableResolutionInProgress = DynamicVariable(false)
 
-    def dealiasExistentials(tpe: Type) = tpe map {
-      case tpe @ ExistentialType(quantified, underlying) =>
-        val dealised = underlying map {
-          case tpe if tpe exists { tpe => quantified contains tpe.typeSymbol } => tpe.dealias
-          case tpe => tpe
-        }
+  def optimizedTransmittableResolution[B: Type, I: Type, R: Type, P: Type, T <: Transmittables: Type](using Quotes) =
+    import quotes.reflect.*
 
-        if (!(dealised exists { tpe => quantified contains tpe.typeSymbol }))
-          dealised
-        else
-          tpe
+    if optimizedTransmittableResolutionInProgress.value then
+      report.throwError("Skipping transmittable resolution macro for recursive invocation")
 
-      case tpe =>
-        tpe
-    }
+    optimizedTransmittableResolutionInProgress.withValue(true) {
+      val resolutionDefault = TypeRepr.of[Transmittable.ResolutionDefault].typeSymbol
+      val transmittable = TypeRepr.of[Transmittable.Any[?, ?, ?]].typeSymbol
+      val identicallyTransmittable = TypeRepr.of[IdenticallyTransmittable[?]]
 
-    val B = dealiasExistentials(weakTypeOf[B])
-    val I = dealiasExistentials(weakTypeOf[I])
-    val R = dealiasExistentials(weakTypeOf[R])
-    val P = dealiasExistentials(weakTypeOf[P])
-    val T = dealiasExistentials(weakTypeOf[T])
+      val transmittableParameters = (List("Base", "Intermediate", "Result", "Proxy", "Transmittables")
+        map transmittable.memberType)
 
-    val resolutionModule = symbolOf[TransmittableBase.Resolution.type]
-    val nothing = B =:= definitions.NothingTpe || B.typeSymbol.owner.owner == resolutionModule
+      val aux = TypeIdent(TypeRepr.of[Transmittable.type].typeSymbol.memberType("Aux")).tpe
 
-    if (!nothing) {
-      val wrapperAlternationClass = symbolOf[TransmittableBase.WrapperAlternation]
-      val wrapperModule = symbolOf[TransmittableBase.Wrapper.type]
+      def boundsAsAlias(tpe: TypeRepr) = tpe match
+        case TypeBounds(low, hi) if low =:= hi => low
+        case TypeBounds(low, hi) if low.typeSymbol == defn.NothingClass => hi
+        case TypeBounds(low, hi) if hi.typeSymbol == defn.AnyClass => low
+        case _ => tpe
 
-      val transmittableParameters = symbolOf[Transmittable[_, _, _]].typeParams
-      val wrapperParameters = symbolOf[TransmittableBase.Wrapper[_, _, _, _, _]].typeParams
-      val pseudoContravariantParameters = List(transmittableParameters.head, wrapperParameters.head)
-      val pseudoCovariantParameters = List(transmittableParameters(2), wrapperParameters(2))
+      object approximator extends SimpleTypeMap(quotes):
+        override def transform(tpe: TypeRepr) = tpe match
+          case _ if tpe.typeSymbol == defn.AnyClass || tpe.typeSymbol == defn.NothingClass =>
+            TypeBounds.empty
+          case tpe: AppliedType =>
+            val bounds = tpe.tycon.typeSymbol.memberTypes collect { case symbol if symbol.isTypeParam => tpe.tycon.memberType(symbol) }
+            if tpe.args.size == bounds.size then
+              val tycon = transform(tpe.tycon)
+              val args = tpe.args zip bounds map {
+                case (tpe, TypeBounds(low, hi)) if tpe =:= low || tpe =:= hi =>
+                  TypeBounds.empty
+                case (tpe, bound) if tpe =:= bound =>
+                  TypeBounds.empty
+                case (tpe, _) =>
+                  transform(tpe)
+              }
+              if tycon != tpe.tycon || args != tpe.args then tycon.appliedTo(args) else tpe
+            else
+              super.transform(tpe)
+          case _ =>
+            super.transform(tpe)
 
-      val identicallyTransmittableType = typeOf[IdenticallyTransmittable[_]]
-      val identicallyTransmittableTree = q"${termNames.ROOTPKG}.loci.transmitter.transmittable.IdenticallyTransmittable"
-      val wrapperTree = tq"${termNames.ROOTPKG}.loci.transmitter.transmittable.TransmittableBase.Wrapper"
+      def inferredOrWildcard(tpe: TypeRepr) =
+        if IsInferred(tpe) then tpe else TypeBounds.empty
 
-      // construct `TransmittableBase.DependantValue[B, I, R, Transmittable.Aux[B, I, R, P, T]]` type for implicit resolution
-      // replace type parameters of macro application that are not inferred with existentials
-      // replace type parameters and `Nothing` types with different `Transmittable.SurrogateType` types
-      // remembering the corresponding original type
-      val (resolutionType, surrogates) = {
-        val TypeRef(surrogateTypePre, surrogateTypeSym, _) =
-          typeOf[TransmittableBase.SurrogateType[Any, Any, Any]]: @unchecked
-        val TypeRef(dependantPre, dependantSym, _) =
-          typeOf[TransmittableBase.DependantValue[Any, Any, Any, Any]]: @unchecked
-        val ExistentialType(existentialQuantified, TypeRef(auxPre, auxSym, existentialArgs)) =
-          typeOf[Transmittable.Aux[_, _, _, _, _]]: @unchecked
+      val resolutionType =
+        val AppliedType(tycon, List(_, i, r, p, t)) = approximator.transform(TypeRepr.of[Transmittable.Resolution[B, I, R, P, T]])
+        tycon.appliedTo(List(TypeRepr.of[B], inferredOrWildcard(i), inferredOrWildcard(r), p, t))
 
-        var count = 0
-        var surrogates = List.empty[(Type, Type)]
-        var quantified = List.empty[Symbol]
-        var args = List.empty[Type]
-
-        def createArg(tpe: Type, index: Int) =
-          if (tpe.typeSymbol.owner.owner == resolutionModule) {
-            quantified ::= existentialQuantified(index)
-            args ::= existentialArgs(index)
-          }
-          else
-            args ::= tpe map {
-              case tpe if tpe.typeSymbol.isParameter || tpe =:= definitions.NothingTpe =>
-                (surrogates
-                  collectFirst { case (surrogate, original) if original =:= tpe => surrogate }
-                  getOrElse {
-                    val surrogate = internal.typeRef(surrogateTypePre, surrogateTypeSym,
-                      List(internal.constantType(Constant(count)), tpe, internal.constantType(Constant(tpe.toString))))
-                    count += 1
-
-                    surrogates ::= surrogate -> tpe
-                    surrogate
+      Implicits.search(resolutionType) match
+        case result: ImplicitSearchSuccess =>
+          object deskolemizerAndTransmittablesAliaser extends SimpleTypeMap(quotes):
+            override def transform(tpe: TypeRepr) = tpe match
+              case _ if tpe.typeSymbol == transmittable =>
+                val aliased =
+                  aux.appliedTo(transmittableParameters map { param =>
+                    transform(boundsAsAlias(memberType(tpe, param)))
                   })
+                if aliased != tpe then aliased else tpe
+              case TypeRef(qualifier, _) if qualifier.getClass.getSimpleName contains "Skolem" =>
+                val dealiased = tpe.dealias
+                if dealiased != tpe then transform(dealiased) else tpe
+              case _ =>
+                super.transform(tpe)
 
-              case tpe =>
-                tpe
-            }
+          object optimizer extends TreeMap:
+            override def transformTypeTree(tree: TypeTree)(owner: Symbol) =
+              val tpe = deskolemizerAndTransmittablesAliaser.transform(tree.tpe)
+              if tpe != tree.tpe then TypeTree.of(using tpe.asType) else tree
 
-        List(T, P, R, I, B).zipWithIndex foreach (createArg _).tupled
+            override def transformTerm(tree: Term)(owner: Symbol) = tree match
+              case Apply(TypeApply(fun, _), List(_, _, arg)) if fun.symbol.owner == resolutionDefault =>
+                val tpe = arg.tpe.widenTermRefByName
+                val args = transmittableParameters map { param =>
+                  deskolemizerAndTransmittablesAliaser.transform(boundsAsAlias(memberType(tpe, param)))
+                }
+                val Apply(TypeApply(resolution, _), _) = '{ Transmittable.Resolution(???) }.asTerm.underlying
 
-        val typeRef = internal.typeRef(dependantPre, dependantSym,
-          (args take 3) :+ internal.typeRef(auxPre, auxSym, args))
+                resolution.appliedToTypes(args).appliedTo(transformTerm(arg)(owner))
 
-        if (quantified.isEmpty)
-          typeRef -> surrogates
-        else
-          internal.existentialType(quantified, typeRef) -> surrogates
-      }
+              case _
+                if tree.tpe.typeSymbol != defn.NullClass &&
+                   tree.tpe.typeSymbol != defn.NothingClass &&
+                   tree.tpe <:< identicallyTransmittable =>
+                val AppliedType(_, List(tpe)) = tree.tpe.widenTermRefByName.dealias
+                val arg = deskolemizerAndTransmittablesAliaser.transform(tpe)
+                val Apply(TypeApply(transmittable, _), _) = '{ IdenticallyTransmittable[Any]() }.asTerm.underlying
 
+                transmittable.appliedToType(arg).appliedToNone
 
-      // resolve `TransmittableBase.DependantValue[B, I, R, Transmittable.Aux[B, I, R, P, T]]` value
-      // extract `TransmittableBase.Any` instance
-      val variantParameters = pseudoContravariantParameters.head.asType.isContravariant
-      if (!variantParameters) {
-        pseudoContravariantParameters foreach { c.internal.setFlag(_, Flag.CONTRAVARIANT) }
-        pseudoCovariantParameters foreach { c.internal.setFlag(_, Flag.COVARIANT) }
-      }
+              case _ =>
+                super.transformTerm(tree)(owner)
+          end optimizer
 
-      val resolutionTree = c inferImplicitValue resolutionType match {
-        case q"$_[..$_]($resolution[..$_]($expr))"
-          if resolution.symbol.owner == wrapperModule ||
-             resolution.symbol.owner == wrapperAlternationClass =>
-          expr
-        case q"$_[..$_]($expr)" =>
-          expr
-        case _ =>
-          EmptyTree
-      }
-
-      if (!variantParameters) {
-        pseudoContravariantParameters foreach { c.internal.resetFlag(_, Flag.CONTRAVARIANT) }
-        pseudoCovariantParameters foreach { c.internal.resetFlag(_, Flag.COVARIANT) }
-      }
-
-      if (resolutionTree.isEmpty)
-        c.abort(c.enclosingPosition,
-          s"Could not resolve ${resolutionType.typeConstructor} for $B")
-
-
-      def dealiasNonRepresentableType(tpe: Type): Type =
-        tpe map {
-          case tpe @ TypeRef(pre @ ThisType(_), sym, _)
-            if sym.asType.isAliasType &&
-               pre.typeSymbol.name.toString == "<refinement>" =>
-            val dealiased = sym.info.asSeenFrom(pre, sym.owner)
-            if (dealiased ne tpe)
-              dealiasNonRepresentableType(dealiased)
-            else
-              tpe
-
-          case tpe =>
-            tpe
-        }
-
-      def hasNonRepresentableType(tpe: Type): Boolean = {
-        val symbols = mutable.Set.empty[Symbol]
-
-        tpe foreach {
-          case ExistentialType(quantified, _) =>
-            symbols ++= quantified
-          case _ =>
-        }
-
-        tpe exists {
-          case tpe @ ThisType(_) =>
-            tpe.typeSymbol.name.toString == "<refinement>"
-          case tpe =>
-            !(symbols contains tpe.typeSymbol) && (tpe.typeSymbol.name.toString endsWith ".type")
-        }
-      }
-
-      // restore original types for types replaced with `TransmittableBase.SurrogateType` types
-      // contract `IdenticallyTransmittable` instances
-      object transformer extends Transformer {
-        def underlyingType(tpe: Type): Type =
-          if (tpe ne tpe.dealias)
-            underlyingType(tpe.dealias)
-          else if (tpe ne tpe.widen)
-            underlyingType(tpe.widen)
-          else
-            tpe
-
-        def originalType(tpe: Type): Option[Type] =
-          surrogates collectFirst { case (surrogate, original) if tpe =:= surrogate => original }
-
-        def restoreType(tpe: Type): Type =
-          tpe map { tpe => originalType(tpe) getOrElse tpe }
-
-        def restoreType(tree: Tree): Tree =
-          if (tree.tpe != null) {
-            val tpe = dealiasNonRepresentableType(tree.tpe)
-            if (hasNonRepresentableType(tpe))
-              internal.setType(tree, null)
-            else
-              internal.setType(tree, restoreType(tpe))
-          }
-          else
-            tree
-
-        override def transform(tree: Tree): Tree = tree match {
-          case tree
-            if tree.symbol != null &&
-               tree.tpe != null &&
-               tree.symbol.isMethod &&
-               tree.tpe <:< identicallyTransmittableType =>
-            q"$identicallyTransmittableTree[${restoreType(underlyingType(tree.tpe).typeArgs.head)}]()"
-
-          case q"$resolution[..$tpts]($expr)"
-            if resolution.symbol.owner == wrapperModule ||
-               resolution.symbol.owner == wrapperAlternationClass =>
-            transform(q"new $wrapperTree[..$tpts]($expr)")
-
-          case TypeApply(fun, args) =>
-            args foreach { restoreType(_) }
-            if (args exists { _.tpe == null })
-              transform(fun)
-            else
-              super.transform(restoreType(tree))
-
-          case DefDef(mods, name, tparams, vparamss, tpt, rhs) =>
-            super.transform(
-              restoreType(
-                treeCopy.DefDef(tree,
-                  mods mapAnnotations { (tree.symbol.annotations map { _.tree }) ++ _ },
-                  name, tparams, vparamss, tpt, rhs)))
-
-          case _ =>
-            super.transform(restoreType(tree))
-        }
-      }
-
-      val result = c untypecheck (transformer transform resolutionTree)
-
-      // construct `Transmittable.Resolution` instance
-      // and type-check against the expected type
-      val expectedResolutionType = {
-        val ExistentialType(existentialQuantified, TypeRef(pre, sym, existentialArgs)) =
-          typeOf[Transmittable.Resolution[_, _, _, _, _]]: @unchecked
-
-        var quantified = List.empty[Symbol]
-        var args = List.empty[Type]
-
-        def createArg(tpe: Type, index: Int) =
-          if (tpe.typeSymbol.owner.owner == resolutionModule) {
-            quantified ::= existentialQuantified(index)
-            args ::= existentialArgs(index)
-          }
-          else
-            args ::= tpe
-
-        List(T, P, R, I, B).zipWithIndex foreach (createArg _).tupled
-
-        val typeRef = internal.typeRef(pre, sym, args)
-
-        if (quantified.isEmpty)
-          typeRef
-        else
-          internal.existentialType(quantified, typeRef)
-      }
-
-      val resolutionResult = c.typecheck(
-        q"new ${termNames.ROOTPKG}.loci.transmitter.transmittable.Transmittable.Resolution($result)",
-        pt = expectedResolutionType)
-
-      val Apply(select @ Select(New(_), _), _) = resolutionResult: @unchecked
-
-      select foreach { tree =>
-        if (tree.tpe != null)
-          internal.setType(tree, dealiasNonRepresentableType(tree.tpe))
-      }
-
-      if (resolutionResult.tpe != null)
-        internal.setType(resolutionResult, dealiasNonRepresentableType(resolutionResult.tpe))
-
-      resolutionResult
+          optimizer.transformTree(result.tree)(Symbol.spliceOwner).asExpr match
+            case result: Expr[Transmittable.Resolution[B, I, R, P, T]] @unchecked => result
     }
-    else
-      q"""new ${termNames.ROOTPKG}.loci.transmitter.transmittable.Transmittable.Resolution[
-        ${definitions.NothingTpe},
-        ${definitions.NothingTpe},
-        ${definitions.NothingTpe},
-        ${typeOf[Future[Nothing]]},
-        ${typeOf[Transmittables.None]}](
-        ${termNames.ROOTPKG}.loci.transmitter.transmittable.TransmittableBase.nothing)"""
-  }
-}
+  end optimizedTransmittableResolution
+
+  def delegatingResolution[D <: Transmittable.Delegating: Type](using Quotes) =
+    import quotes.reflect.*
+
+    def summon[T: Type]: Expr[T] =
+      val transmittable =
+        Type.of[T] match
+          case '[ Transmittable.Aux[b, i, r, p, t] ] =>
+            Expr.summon[Transmittable.Resolution[b, i, r, p, t]] map { resolution =>
+              '{$resolution.transmittable}.asExprOf[T]
+            }
+          case _ =>
+            None
+
+      transmittable getOrElse report.throwError("Delegation is not transmittable")
+
+    def resolve[D: Type]: Expr[D] =
+      Type.of[D] match
+        case '[ d / t ] => '{ /(${resolve[d]}, ${summon[t]}) }.asExprOf[D]
+        case _ => summon[D]
+
+    '{ Transmittable.Delegating.Resolution(${resolve[D]}) }
+  end delegatingResolution
+
+  private def memberType(using Quotes)(tpe: quotes.reflect.TypeRepr, symbol: quotes.reflect.Symbol) =
+    import quotes.reflect.*
+
+    def memberTypeInRefinement(tpe: TypeRepr, name: String): Option[TypeRepr] = tpe match
+      case Refinement(_, `name`, info) => Some(info)
+      case Refinement(parent, _, _) => memberTypeInRefinement(parent, name)
+      case _ => None
+
+    memberTypeInRefinement(tpe, symbol.name) orElse
+    memberTypeInRefinement(tpe.dealias, symbol.name) getOrElse
+    tpe.memberType(tpe.baseClasses
+      collectFirst Function.unlift { base =>
+        val overriding = symbol.overridingSymbol(base)
+        Option.when(overriding.exists)(overriding)
+      }
+      getOrElse Symbol.noSymbol)
+  end memberType
+
+  private trait SimpleTypeMap[Q <: Quotes & Singleton](val quotes: Q):
+    import quotes.reflect.*
+
+    def transform(tpe: TypeRepr): TypeRepr = tpe match
+      case tpe: AppliedType =>
+        val tycon = transform(tpe.tycon)
+        val args = tpe.args map transform
+        if tycon != tpe.tycon || args != tpe.args then tycon.appliedTo(args) else tpe
+      case tpe: TypeBounds =>
+        val low = transform(tpe.low)
+        val hi = transform(tpe.hi)
+        if low != tpe.low || hi != tpe.hi then TypeBounds(low, hi) else tpe
+      case tpe: Refinement =>
+        val parent = transform(tpe.parent)
+        val info = transform(tpe.info)
+        if parent != tpe.parent || info != tpe.info then Refinement(parent, tpe.name, info) else tpe
+      case _ =>
+        tpe
+  end SimpleTypeMap
+end TransmittableResolution

@@ -1,25 +1,21 @@
 package loci
 package transmitter
 
-import scala.language.experimental.macros
-import scala.reflect.macros.whitebox
+import scala.quoted.*
 
-object DummyImplicit {
-  class Resolvable private[DummyImplicit]
+object DummyImplicit:
+  sealed trait Resolvable
 
-  object Resolvable {
-    implicit def dummy: Resolvable = new Resolvable
-    implicit def noDummy: Resolvable = macro NoDummyImplicit.skip
-  }
+  object Resolvable:
+    object instance extends Resolvable
+    transparent inline given dummy: Resolvable = instance
+    transparent inline given noDummy: Resolvable = ${ NoDummyImplicit.skip }
 
-  class Unresolvable private[DummyImplicit]
+  sealed trait Unresolvable
 
-  object Unresolvable {
-    implicit def noDummy: Unresolvable = macro NoDummyImplicit.skip
-  }
-}
+  object Unresolvable:
+    transparent inline given noDummy: Unresolvable = ${ NoDummyImplicit.skip }
 
-object NoDummyImplicit {
-  def skip(c: whitebox.Context): c.Tree =
-    c.abort(c.enclosingPosition, "`noDummy` must not be called")
-}
+object NoDummyImplicit:
+  def skip(using Quotes) =
+    quotes.reflect.report.throwError("`noDummy` must not be called")

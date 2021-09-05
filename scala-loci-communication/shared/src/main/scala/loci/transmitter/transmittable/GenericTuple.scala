@@ -41,7 +41,11 @@ object GenericTuple:
     : Expr[Delegation[B *: BT, I *: IT, R *: RT, D / Transmittable.Aux[B, I, R, P, T], Outer]] =
       import quotes.reflect.*
 
-      val '{ Transmittable.Resolution.resolution[B, I, R](using $transmittable) } = resolution
+      val transmittable = resolution match
+        case '{ Transmittable.Resolution[B, I, R, P, T]($transmittable) } => transmittable
+        case '{ Transmittable.Resolution.resolution[B, I, R](using $dummyI, $dummyB, $transmittable) } => transmittable
+        case '{ Transmittable.Resolution.resolutionAlternation[B, I, R](using $dummyI, $dummyB, $transmittable) } => transmittable
+
       val '{ new Delegation[BT, IT, RT, D, false]($delegates, $provide, $receive) } = delegation
 
       val (provideTransformation, receiveTransformation) =
@@ -65,7 +69,10 @@ object GenericTuple:
     : Expr[Delegation[B *: EmptyTuple, I *: EmptyTuple, R *: EmptyTuple, Transmittable.Aux[B, I, R, P, T], Outer]] =
       import quotes.reflect.*
 
-      val '{ Transmittable.Resolution.resolution[B, I, R](using $transmittable) } = resolution
+      val transmittable = resolution match
+        case '{ Transmittable.Resolution[B, I, R, P, T]($transmittable) } => transmittable
+        case '{ Transmittable.Resolution.resolution[B, I, R](using $dummyI, $dummyB, $transmittable) } => transmittable
+        case '{ Transmittable.Resolution.resolutionAlternation[B, I, R](using $dummyI, $dummyB, $transmittable) } => transmittable
 
       val (provideTransformation, receiveTransformation) =
         makeTransformations[B *: EmptyTuple, I *: EmptyTuple, R *: EmptyTuple, Transmittable.Aux[B, I, R, P, T], Outer]
