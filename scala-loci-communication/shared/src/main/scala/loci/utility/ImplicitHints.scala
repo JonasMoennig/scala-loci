@@ -90,7 +90,7 @@ object implicitHints:
             i > 1 && path(i) != '_'
           do ()
 
-          i > 1 && path(i + 1) == '3' && (path(i + 2) == '.' || path(i + 2) == '-')
+          i > 1 && (path(i + 1) == '2' || path(i + 1) == '3') && (path(i + 2) == '.' || path(i + 2) == '-')
         end mightBeScalaSource
 
         mightBeScalaSource(associatedFileMethod.invoke(symbol, quotes.getClass.getMethod("ctx").invoke(quotes)))
@@ -137,10 +137,10 @@ object implicitHints:
               def importNames(insideImportScope: Boolean)(tree: Any): Set[String] = tree match
                 case name if insideImportScope && nameClass.isInstance(name) =>
                   Set(name.toString)
-                case tree: Product =>
-                  tree.productIterator.toSet flatMap importNames(insideImportScope || importClass.isInstance(tree))
                 case trees: List[_] =>
                   trees.toSet flatMap importNames(insideImportScope)
+                case tree: Product =>
+                  tree.productIterator.toSet flatMap importNames(insideImportScope || importClass.isInstance(tree))
                 case _ =>
                   Set.empty
 
@@ -164,8 +164,8 @@ object implicitHints:
         def typeSymbols(tpe: Any): Set[Symbol] =
           val symbols =
             tpe match
-              case tpe: Product => tpe.productIterator.toSet flatMap typeSymbols
               case tpes: List[_] => tpes.toSet flatMap typeSymbols
+              case tpe: Product => tpe.productIterator.toSet flatMap typeSymbols
               case _ => Set.empty
 
           tpe match

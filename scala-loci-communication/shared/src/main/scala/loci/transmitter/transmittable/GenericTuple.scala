@@ -90,8 +90,7 @@ object GenericTuple:
       D <: Transmittable.Delegating: Type, Outer <: Boolean: Type](using Quotes) =
     import quotes.reflect.*
 
-    val '{ $block } = '{ type Delegating = D }
-    val Block(List(typeDefinition), _) = block.asTerm
+    val Block(List(typeDefinition), _) = '{ type Delegating = D }.asTerm.underlying
 
     if Type.valueOfConstant[Outer] contains true then
       given Type[D] = TypeIdent(typeDefinition.symbol).tpe.asType.asInstanceOf[Type[D]]
@@ -102,18 +101,24 @@ object GenericTuple:
         import scala.language.unsafeNulls
         type Delegating = D
         (value: B, context: DelegatingTransmittable.ProvidingContext[D]) =>
-          Tuples.fromIArray((value.productIterator zip ${Expr.ofSeq(baseSelectors)}.iterator map { valueSelector =>
-            (context delegate valueSelector._1.asInstanceOf[Object])(using valueSelector._2)
-          }).toArray.asInstanceOf[IArray[Object]]).asInstanceOf[I]
+          (if value == null then
+             null
+           else
+             Tuples.fromIArray((value.productIterator zip ${Expr.ofSeq(baseSelectors)}.iterator map { valueSelector =>
+               (context delegate valueSelector._1.asInstanceOf[Object])(using valueSelector._2)
+             }).toArray.asInstanceOf[IArray[Object]])).asInstanceOf[I]
       }
 
       val receiveTransformation = '{
         import scala.language.unsafeNulls
         type Delegating = D
         (value: I, context: DelegatingTransmittable.ReceivingContext[D]) =>
-          Tuples.fromIArray((value.productIterator zip ${Expr.ofSeq(intermediateSelectors)}.iterator map { valueSelector =>
-            (context delegate valueSelector._1.asInstanceOf[Object])(using valueSelector._2)
-          }).toArray.asInstanceOf[IArray[Object]]).asInstanceOf[R]
+          (if value == null then
+             null
+           else
+             Tuples.fromIArray((value.productIterator zip ${Expr.ofSeq(intermediateSelectors)}.iterator map { valueSelector =>
+               (context delegate valueSelector._1.asInstanceOf[Object])(using valueSelector._2)
+             }).toArray.asInstanceOf[IArray[Object]])).asInstanceOf[R]
       }
 
       object typeDefinitionReplacer extends TreeMap:
