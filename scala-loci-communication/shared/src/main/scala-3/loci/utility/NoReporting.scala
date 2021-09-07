@@ -13,21 +13,32 @@ object noReporting:
       val quotesImplClass = Class.forName("scala.quoted.runtime.impl.QuotesImpl")
       val contextsClass = Class.forName("dotty.tools.dotc.core.Contexts")
       val contextClass = Class.forName("dotty.tools.dotc.core.Contexts$Context")
+      val freshContextClass = Class.forName("dotty.tools.dotc.core.Contexts$FreshContext")
+      val reporterClass = Class.forName("dotty.tools.dotc.reporting.Reporter")
+      val noReporterClass = Class.forName("dotty.tools.dotc.reporting.Reporter$NoReporter$")
 
       val quotesImpl = quotesImplClass.getMethod("apply", contextClass)
       val exploreCtx = contextsClass.getMethod("inline$exploreCtx", contextClass)
       val wrapUpExplore = contextsClass.getMethod("inline$wrapUpExplore", contextClass)
+      val reporter = contextClass.getMethod("reporter")
+      val setReporter = freshContextClass.getMethod("setReporter", reporterClass)
+
+      val noReporter = noReporterClass.getField("MODULE$").get(noReporterClass)
 
       val freshContext = exploreCtx.invoke(null, context)
+      val exploringReporter = reporter.invoke(freshContext)
+
+      setReporter.invoke(freshContext, noReporter)
 
       quotesImpl.invoke(null, freshContext) match
-        case quotes: Quotes => Some((quotes, wrapUpExplore, freshContext))
+        case quotes: Quotes => Some((quotes, setReporter, exploringReporter, wrapUpExplore, freshContext))
         case _ => None
 
     catch
-      case _: ClassNotFoundException  | _: NoSuchMethodException |  _: IllegalArgumentException => None
+      case _: ClassNotFoundException  | _: NoSuchMethodException | _: NoSuchFieldException |  _: IllegalArgumentException =>
+        None
 
-    reset.fold(default) { (quotes, wrapUpExplore, freshContext) =>
+    reset.fold(default) { (quotes, setReporter, exploringReporter, wrapUpExplore, freshContext) =>
       try
         val filteredOut = new ProxyPrintStream(Console.out) {
           def filterOut(s: String) = s startsWith "exception"
@@ -45,8 +56,11 @@ object noReporting:
         }
 
       finally
-        try wrapUpExplore.invoke(null, freshContext)
-        catch { case _: IllegalArgumentException => }
+        try
+          setReporter.invoke(freshContext, exploringReporter)
+          wrapUpExplore.invoke(null, freshContext)
+        catch
+          case _: IllegalArgumentException =>
     }
   end apply
 
