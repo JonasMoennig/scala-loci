@@ -178,7 +178,26 @@ trait ConnectionsBase[R, M] {
         Failure(terminatedException)
     }
 
-  def exchangeIdentities(connection: Connection[ConnectionsBase.Protocol], handler: String => Unit, is_listener: Boolean): Unit = {
+  private def sendIdentityMessage(connection: Connection[ConnectionsBase.Protocol]) = {
+    val message = messaging.Message[IdentityMessage.type](IdentityMessage,
+      Map(IdentityMessage.Identity -> Seq(identity)), MessageBuffer.empty)
+    connection.send(messaging.Message.serialize[IdentityMessage.type](message))
+  }
+
+  /**
+   * Performs the exchange of identities between peers
+   *
+   * This method needs to be called, after the underlying network connection has been established, but before the
+   * RemoteRef is created.
+   *
+   * The connector sends an Identity message to the listener first. The listener answers with its own identity. There
+   * are no other parts of the protocol.
+   *
+   * @param connection Connection to remote peer
+   * @param handler Function which is called after successfull exchage of identities
+   * @param is_listener Flag whether we act as listener or connector
+   */
+  protected def exchangeIdentities(connection: Connection[ConnectionsBase.Protocol], handler: String => Unit, is_listener: Boolean): Unit = {
     var remote_identity: String = null
 
     var receive_handler: Notice[_]= null
@@ -192,8 +211,7 @@ trait ConnectionsBase[R, M] {
               if (receive_handler != null)
                 receive_handler.remove()
               if (is_listener) {
-                val message = messaging.Message[IdentityMessage.type](IdentityMessage, Map(IdentityMessage.Identity -> Seq(identity)), MessageBuffer.empty)
-                connection.send(messaging.Message.serialize[IdentityMessage.type](message))
+                sendIdentityMessage(connection)
               }
               identity
             }
@@ -206,8 +224,7 @@ trait ConnectionsBase[R, M] {
     }
 
     if (!is_listener) {
-      val message = messaging.Message[IdentityMessage.type](IdentityMessage, Map(IdentityMessage.Identity -> Seq(identity)), MessageBuffer.empty)
-      connection.send(messaging.Message.serialize[IdentityMessage.type](message))
+      sendIdentityMessage(connection)
     }
   }
 
