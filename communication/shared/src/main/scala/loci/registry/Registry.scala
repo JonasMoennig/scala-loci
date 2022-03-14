@@ -2,11 +2,11 @@ package loci
 package registry
 
 import communicator.{Connector, Listener}
+import loci.registry.Registry.Message.message
 import messaging.{Channels, Message}
 import transmitter.{RemoteAccessException, RemoteRef}
 
 import java.util.concurrent.ConcurrentHashMap
-
 import scala.collection.mutable
 import scala.concurrent.{Future, Promise}
 import scala.util.{Failure, Success, Try}
@@ -74,7 +74,6 @@ class Registry {
   def running: Boolean = !connections.isTerminated
 
   def terminate(): Unit = connections.terminate()
-
 
   connections.remoteJoined foreach { remote =>
     logging.trace(s"remote joined: $remote")

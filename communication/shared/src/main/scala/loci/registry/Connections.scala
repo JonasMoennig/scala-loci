@@ -13,7 +13,7 @@ object Connections {
   type Protocol = ConnectionsBase.Protocol
 
   private final case class RemoteRef(
-      id: Long, protocol: Protocol)(
+      id: Long, protocol: Protocol, identity: String)(
       connections: Connections[_]) extends transmitter.RemoteRef {
     val doDisconnected = Notice.Steady[Unit]
 
@@ -47,26 +47,30 @@ class Connections[M: Message.Method]
   def connect(
       connector: Connector[Connections.Protocol])(
       handler: Try[RemoteRef] => Unit): Unit =
-    connector.connect() { addConnection(_, handler) }
+    connector.connect() { addConnection(_, handler, false) }
 
   def listen(listener: Listener[Connections.Protocol])(
-      handler: Try[RemoteRef] => Unit): Try[Unit] =
-    listener.startListening() { addConnection(_, handler) } match {
+      handler: Try[RemoteRef] => Unit): Try[Unit] = {
+    listener.startListening() { addConnection(_, handler, true) } match {
       case Success(listening) =>
         addListening(listening)
       case Failure(exception) =>
         Failure(exception)
     }
+  }
 
   private def addConnection(
       connection: Try[Connection[Connections.Protocol]],
-      handler: Try[RemoteRef] => Unit): Unit =
+      handler: Try[RemoteRef] => Unit, is_listener: Boolean): Unit =
     connection match {
       case Success(connection) =>
-        val remote = Connections.RemoteRef(
-          state.createId(), connection.protocol)(this)
-        handler(addConnection(remote, connection) map { _ => remote })
+        exchangeIdentities(connection, {remote_identity =>
 
+          val remote = Connections.RemoteRef(
+            state.createId(), connection.protocol, remote_identity)(this)
+          handler(addConnection(remote, connection) map { _ => remote })
+
+        }, is_listener)
       case Failure(exception) =>
         handler(Failure(exception))
     }

@@ -116,4 +116,33 @@ class RegistrySpec extends AnyFlatSpec with Matchers with NoLogging {
         "method called", "method result")
     }
   }
+
+
+  it should "handle identities correctly" in {
+
+    val listener = new NetworkListener()
+    val registry0 = new Registry()
+    registry0.listen(listener)
+    val registry1 = new Registry()
+
+    var identity1: String = null
+    var identity2: String = null
+    registry1.connect(listener.createConnector()) foreach { remote =>
+      identity1 = remote.identity
+      remote.disconnect()
+    }
+    listener.run()
+    registry1.connect(listener.createConnector()) foreach { remote =>
+      identity2 = remote.identity
+    }
+
+    registry0.terminate()
+    registry1.terminate()
+
+    identity1 should be (identity2)
+    identity1 should not be (null)
+    identity2 should not be (null)
+    identity1 should not be ("")
+    identity2 should not be ("")
+  }
 }

@@ -15,6 +15,12 @@ object ConnectionsBase {
   type Protocol = ProtocolCommon with Bidirectional
 }
 
+case object IdentityMessage {
+  implicit val message =
+    messaging.Message.Method(IdentityMessage -> "Loci/Identity")
+
+  final val Identity = "Identity"
+}
 trait ConnectionsBase[R, M] {
   protected def terminatedException =
     new ConnectionException("remote connection terminated")
@@ -53,6 +59,8 @@ trait ConnectionsBase[R, M] {
 
   val receive: Notice.Stream[(R, M)] = doReceive.notice
 
+  private var identity: String = null
+
   def remotes: List[R] = state.remotes.asScala.toList
 
   def isRunning: Boolean = state.isRunning
@@ -66,6 +74,7 @@ trait ConnectionsBase[R, M] {
     sync {
       if (!state.isTerminated && !state.isRunning) {
         logging.trace("connection system started")
+        identity = java.util.UUID.randomUUID().toString
 
         state.messages foreach doReceive.fire
         state.messages.clear()
@@ -168,6 +177,39 @@ trait ConnectionsBase[R, M] {
       else
         Failure(terminatedException)
     }
+
+  def exchangeIdentities(connection: Connection[ConnectionsBase.Protocol], handler: String => Unit, is_listener: Boolean): Unit = {
+    var remote_identity: String = null
+
+    var receive_handler: Notice[_]= null
+
+    receive_handler = connection.receive foreach {
+      message => {
+        messaging.Message.deserialize[IdentityMessage.type](message) foreach { received_message =>
+          val messaging.Message(_, properties, _) = received_message
+          remote_identity = properties get IdentityMessage.Identity match {
+            case Some(Seq(identity)) => {
+              if (receive_handler != null)
+                receive_handler.remove()
+              if (is_listener) {
+                val message = messaging.Message[IdentityMessage.type](IdentityMessage, Map(IdentityMessage.Identity -> Seq(identity)), MessageBuffer.empty)
+                connection.send(messaging.Message.serialize[IdentityMessage.type](message))
+              }
+              identity
+            }
+            case _ => null
+          }
+
+          handler(remote_identity)
+        }
+      }
+    }
+
+    if (!is_listener) {
+      val message = messaging.Message[IdentityMessage.type](IdentityMessage, Map(IdentityMessage.Identity -> Seq(identity)), MessageBuffer.empty)
+      connection.send(messaging.Message.serialize[IdentityMessage.type](message))
+    }
+  }
 
   protected def addConnection(
       remote: R, connection: Connection[ConnectionsBase.Protocol]): Try[Unit] =

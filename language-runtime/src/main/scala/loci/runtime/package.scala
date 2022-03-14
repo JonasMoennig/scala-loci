@@ -12,7 +12,8 @@ package object runtime {
   object Remote {
     case class Reference(
       id: Long,
-      signature: Peer.Signature)(
+      signature: Peer.Signature,
+      identity: String)(
       val protocol: ProtocolCommon,
       private[runtime] val remoteConnections: RemoteConnections)
         extends language.Remote.Reference[Nothing] {

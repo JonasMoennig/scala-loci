@@ -26,6 +26,7 @@ class MarshallableSpec extends AnyFlatSpec with Matchers with NoLogging {
       def connected = true
       def disconnect() = ()
       val disconnected = Notice.Steady[Unit].notice
+      val identity = ""
     }
 
     val remote0 = Remote(0)
