@@ -5,11 +5,11 @@ import contexts.Immediate.Implicits.global
 import communicator.NetworkListener
 import transmitter.RemoteAccessException
 import serializer.Serializables._
-
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import scala.collection.mutable
+import scala.collection.mutable.ListBuffer
 import scala.concurrent.{Future, Promise}
 import scala.util.Success
 
@@ -117,7 +117,6 @@ class RegistrySpec extends AnyFlatSpec with Matchers with NoLogging {
     }
   }
 
-
   it should "handle identities correctly" in {
 
     val listener = new NetworkListener()
@@ -125,24 +124,37 @@ class RegistrySpec extends AnyFlatSpec with Matchers with NoLogging {
     registry0.listen(listener)
     val registry1 = new Registry()
 
-    var identity1: String = null
-    var identity2: String = null
+    var identity0_0: String = null
+    var identity0_1: String = null
+
+    val identities1: ListBuffer[String] = ListBuffer()
+
+    registry0.remoteJoined foreach { remote =>
+      identities1.append(remote.identity)
+    }
+
     registry1.connect(listener.createConnector()) foreach { remote =>
-      identity1 = remote.identity
+      identity0_0 = remote.identity
       remote.disconnect()
     }
     listener.run()
     registry1.connect(listener.createConnector()) foreach { remote =>
-      identity2 = remote.identity
+      identity0_1 = remote.identity
     }
 
     registry0.terminate()
     registry1.terminate()
 
-    identity1 should be (identity2)
-    identity1 should not be (null)
-    identity2 should not be (null)
-    identity1 should not be ("")
-    identity2 should not be ("")
+    identity0_0 should be (identity0_1)
+    identity0_0 should not be (null)
+    identity0_1 should not be (null)
+    identity0_0 should not be ("")
+    identity0_1 should not be ("")
+
+    identities1 should have size 2
+    identities1(1) should be (identities1(1))
+    identities1(0) should not be (null)
+    identities1(0) should not be ("")
+
   }
 }
