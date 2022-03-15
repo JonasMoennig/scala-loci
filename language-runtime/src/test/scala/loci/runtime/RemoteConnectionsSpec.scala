@@ -3,12 +3,12 @@ package runtime
 
 import communicator.{NetworkConnector, NetworkListener}
 import messaging.Message
-
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import scala.collection.mutable
 import scala.collection.Seq
+import scala.util.Success
 
 @compatibility.nowarn("msg=multiarg infix syntax")
 class RemoteConnectionsSpec extends AnyFlatSpec with Matchers with NoLogging {
@@ -180,5 +180,44 @@ class RemoteConnectionsSpec extends AnyFlatSpec with Matchers with NoLogging {
 
       Seq(client0, client1, node0, node1, dummy, server) foreach { _.terminate() }
     }
+  }
+  it should "handle identities correctly" in {
+
+    val (events, dummy, server, client0, client1, node0, node1) = setup
+    val listener = new NetworkListener
+
+    var identity1: String = null
+    var identity2: String = null
+
+    server.listen(listener, clientSig)
+    client0.connect(listener.createConnector(), serverSig) foreach { remote => remote match {
+      case Success(remoteRef) => {
+        identity1 = remoteRef.identity
+        client0.disconnect(remoteRef)
+        client0.connect(listener.createConnector(), serverSig) foreach { remote => remote match {
+          case Success(remoteRef) => {
+            identity2 = remoteRef.identity
+            client0.disconnect(remoteRef)
+          }
+          case _ => {
+            //Fail test
+          }
+        }
+        }
+      }
+      case _ => {
+        //Fail test
+      }
+    }
+    }
+    server.terminate()
+
+    Seq(client0, client1, node0, node1, dummy, server) foreach { _.terminate() }
+
+    identity1 should be (identity2)
+    identity1 should not be (null)
+    identity2 should not be (null)
+    identity1 should not be ("")
+    identity2 should not be ("")
   }
 }
