@@ -64,52 +64,55 @@ class RemoteConnections(peer: Peer.Signature, ties: Map[Peer.Signature, Peer.Tie
         state.potentials += remotePeer
 
         connector.connect() {
-          case Success(connection) =>
-            val remote = Remote.Reference(
-              state.createId(), remotePeer, "")(
-              connection.protocol, this)
+          case Success(connection) => {
+            exchangeIdentities(connection, remote_identity => {
+              val remote = Remote.Reference(
+                state.createId(), remotePeer, remote_identity)(
+                connection.protocol, this)
 
-            var closedHandler: Notice[_] = null
-            var receiveHandler: Notice[_] = null
+              var closedHandler: Notice[_] = null
+              var receiveHandler: Notice[_] = null
 
-            closedHandler = connection.closed foreach { _ =>
-              handler(Failure(terminatedException))
-            }
+              closedHandler = connection.closed foreach { _ =>
+                handler(Failure(terminatedException))
+              }
 
-            receiveHandler = connection.receive foreach { data =>
-              sync {
-                state.potentials -= remotePeer
+              receiveHandler = connection.receive foreach { data =>
+                sync {
+                  state.potentials -= remotePeer
 
-                if (receiveHandler != null)
-                  receiveHandler.remove()
-                if (closedHandler != null)
-                  closedHandler.remove()
+                  if (receiveHandler != null)
+                    receiveHandler.remove()
+                  if (closedHandler != null)
+                    closedHandler.remove()
 
-                val handleAccept =
-                  handleAcceptMessage(connection, remote)
-                val handleRequest =
-                  handleRequestMessage(connection, remotePeer) andThen {
-                    _ map { case (remote, _) => remote }
+                  val handleAccept =
+                    handleAcceptMessage(connection, remote)
+                  val handleRequest =
+                    handleRequestMessage(connection, remotePeer, remote_identity) andThen {
+                      _ map { case (remote, _) => remote }
+                    }
+
+                  val result = deserializeMessage(data) flatMap {
+                    handleAccept orElse handleRequest orElse
+                      handleUnknownMessage
                   }
 
-                val result = deserializeMessage(data) flatMap {
-                  handleAccept orElse handleRequest orElse
-                  handleUnknownMessage
+                  if (result.isFailure)
+                    connection.close()
+
+                  afterSync { handler(result) }
                 }
-
-                if (result.isFailure)
-                  connection.close()
-
-                afterSync { handler(result) }
               }
-            }
 
-            logging.trace(s"connecting to remote $remotePeer")
+              logging.trace(s"connecting to remote $remotePeer")
 
-            connection.send(serializeMessage(
-              RequestMessage(
-                Peer.Signature.serialize(remotePeer),
-                Peer.Signature.serialize(peer))))
+              connection.send(serializeMessage(
+                RequestMessage(
+                  Peer.Signature.serialize(remotePeer),
+                  Peer.Signature.serialize(peer))))
+            }, false)
+          }
 
           case Failure(exception) =>
             logging.trace(s"connecting to remote failed: $remotePeer", exception)
@@ -144,22 +147,24 @@ class RemoteConnections(peer: Peer.Signature, ties: Map[Peer.Signature, Peer.Tie
           case Success(connection) =>
             var receiveHandler: Notice[_] = null
 
-            receiveHandler = connection.receive foreach { data =>
-              if (receiveHandler != null)
-                receiveHandler.remove()
+            exchangeIdentities(connection, remote_identity => {
+              receiveHandler = connection.receive foreach { data =>
+                if (receiveHandler != null)
+                  receiveHandler.remove()
 
-              val handleRequest = handleRequestMessage(
-                connection, remotePeer, createDesignatedInstance)
+                val handleRequest = handleRequestMessage(
+                  connection, remotePeer, remote_identity, createDesignatedInstance)
 
-              val result = deserializeMessage(data) flatMap {
-                handleRequest orElse handleUnknownMessage
+                val result = deserializeMessage(data) flatMap {
+                  handleRequest orElse handleUnknownMessage
+                }
+
+                if (result.isFailure)
+                  connection.close()
+
+                handler(result)
               }
-
-              if (result.isFailure)
-                connection.close()
-
-              handler(result)
-            }
+            }, true)
 
           case Failure(exception) =>
             handler(Failure(exception))
@@ -176,7 +181,9 @@ class RemoteConnections(peer: Peer.Signature, ties: Map[Peer.Signature, Peer.Tie
   private def handleRequestMessage(
       connection: Connection[ConnectionsBase.Protocol],
       remotePeer: Peer.Signature,
+      remote_identity: String,
       createDesignatedInstance: Boolean = false)
+
   : PartialFunction[Message[Method], Try[(Remote.Reference, RemoteConnections)]] = {
     case RequestMessage(requested, requesting) =>
       sync {
@@ -191,7 +198,7 @@ class RemoteConnections(peer: Peer.Signature, ties: Map[Peer.Signature, Peer.Tie
                   else new RemoteConnections(peer, ties)
 
                 val remote = Remote.Reference(
-                  instance.state.createId(), remotePeer, "")(
+                  instance.state.createId(), remotePeer, remote_identity)(
                   connection.protocol, this)
 
                 connection.send(serializeMessage(AcceptMessage()))

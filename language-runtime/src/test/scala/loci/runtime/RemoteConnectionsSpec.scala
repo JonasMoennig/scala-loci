@@ -200,13 +200,11 @@ class RemoteConnectionsSpec extends AnyFlatSpec with Matchers with NoLogging {
             client0.disconnect(remoteRef)
           }
           case _ => {
-            //Fail test
           }
         }
         }
       }
       case _ => {
-        //Fail test
       }
     }
     }

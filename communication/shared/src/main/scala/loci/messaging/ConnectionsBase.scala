@@ -194,7 +194,7 @@ trait ConnectionsBase[R, M] {
    * are no other parts of the protocol.
    *
    * @param connection Connection to remote peer
-   * @param handler Function which is called after successfull exchage of identities
+   * @param handler Function which is called after successful exchange of identities
    * @param is_listener Flag whether we act as listener or connector
    */
   protected def exchangeIdentities(connection: Connection[ConnectionsBase.Protocol], handler: String => Unit, is_listener: Boolean): Unit = {
@@ -207,15 +207,15 @@ trait ConnectionsBase[R, M] {
         messaging.Message.deserialize[IdentityMessage.type](message) foreach { received_message =>
           val messaging.Message(_, properties, _) = received_message
           remote_identity = properties get IdentityMessage.Identity match {
-            case Some(Seq(identity)) => {
+            case Some(Seq(remote_identity)) => {
               if (receive_handler != null)
                 receive_handler.remove()
               if (is_listener) {
                 sendIdentityMessage(connection)
               }
-              identity
+              remote_identity
             }
-            case _ => null
+            case _ => throw new IllegalStateException("Expected identity of peer in packet but received something else")
           }
 
           handler(remote_identity)
