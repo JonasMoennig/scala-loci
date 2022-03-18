@@ -20,6 +20,7 @@ case object IdentityMessage {
     messaging.Message.Method(IdentityMessage -> "Loci/Identity")
 
   final val Identity = "Identity"
+  final val ACK = "ACK"
 }
 trait ConnectionsBase[R, M] {
   protected def terminatedException =
@@ -59,7 +60,7 @@ trait ConnectionsBase[R, M] {
 
   val receive: Notice.Stream[(R, M)] = doReceive.notice
 
-  private var identity: String = null
+  private var identity: String = java.util.UUID.randomUUID().toString
 
   def remotes: List[R] = state.remotes.asScala.toList
 
@@ -74,7 +75,6 @@ trait ConnectionsBase[R, M] {
     sync {
       if (!state.isTerminated && !state.isRunning) {
         logging.trace("connection system started")
-        identity = java.util.UUID.randomUUID().toString
 
         state.messages foreach doReceive.fire
         state.messages.clear()
@@ -178,9 +178,13 @@ trait ConnectionsBase[R, M] {
         Failure(terminatedException)
     }
 
-  private def sendIdentityMessage(connection: Connection[ConnectionsBase.Protocol]) = {
+  private def sendIdentityMessage(connection: Connection[ConnectionsBase.Protocol], ack: Boolean) = {
+    var ack_value = "0"
+    if (ack) {
+      ack_value = "1"
+    }
     val message = messaging.Message[IdentityMessage.type](IdentityMessage,
-      Map(IdentityMessage.Identity -> Seq(identity)), MessageBuffer.empty)
+      Map(IdentityMessage.Identity -> Seq(identity), IdentityMessage.ACK -> Seq(ack_value)), MessageBuffer.empty)
     connection.send(messaging.Message.serialize[IdentityMessage.type](message))
   }
 
@@ -190,11 +194,8 @@ trait ConnectionsBase[R, M] {
    * This method needs to be called, after the underlying network connection has been established, but before the
    * RemoteRef is created.
    *
-   * The connector sends an Identity message to the listener first. The listener answers with its own identity. There
-   * are no other parts of the protocol.
-   *
    * @param connection Connection to remote peer
-   * @param handler Function which is called after successful exchange of identities
+   * @param handler is called with identity of peer after successful exchange of identities
    * @param is_listener Flag whether we act as listener or connector
    */
   protected def exchangeIdentities(connection: Connection[ConnectionsBase.Protocol], handler: String => Unit, is_listener: Boolean): Unit = {
@@ -206,12 +207,12 @@ trait ConnectionsBase[R, M] {
       message => {
         messaging.Message.deserialize[IdentityMessage.type](message) foreach { received_message =>
           val messaging.Message(_, properties, _) = received_message
-          remote_identity = properties get IdentityMessage.Identity match {
-            case Some(Seq(remote_identity)) => {
+          remote_identity = (properties get IdentityMessage.Identity, properties get IdentityMessage.ACK) match {
+            case (Some(Seq(remote_identity)), Some(Seq(ack))) => {
               if (receive_handler != null)
                 receive_handler.remove()
-              if (is_listener) {
-                sendIdentityMessage(connection)
+              if (ack.equals("0")) {
+                sendIdentityMessage(connection, true)
               }
               remote_identity
             }
@@ -224,7 +225,7 @@ trait ConnectionsBase[R, M] {
     }
 
     if (!is_listener) {
-      sendIdentityMessage(connection)
+      sendIdentityMessage(connection, false)
     }
   }
 

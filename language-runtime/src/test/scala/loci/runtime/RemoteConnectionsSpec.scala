@@ -111,10 +111,10 @@ class RemoteConnectionsSpec extends AnyFlatSpec with Matchers with NoLogging {
       val (events, dummy, server, client0, client1, node0, node1) = setup
       val connector = new NetworkConnector(deferred = seed != 0, seed)
 
+      connector.run()
+
       node0.connect(connector.first, nodeSig)
       node1.connect(connector.second, nodeSig)
-
-      connector.run()
 
       node0.terminate()
 
