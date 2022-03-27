@@ -145,16 +145,11 @@ class RegistrySpec extends AnyFlatSpec with Matchers with NoLogging {
     registry0.terminate()
     registry1.terminate()
 
-    identity0_0 should be (identity0_1)
-    identity0_0 should not be (null)
-    identity0_1 should not be (null)
-    identity0_0 should not be ("")
-    identity0_1 should not be ("")
+    identity0_0 should be (registry0.identity)
+    identity0_1 should be (registry0.identity)
 
     identities1 should have size 2
-    identities1(1) should be (identities1(1))
-    identities1(0) should not be (null)
-    identities1(0) should not be ("")
-
+    identities1(0) should be (registry1.identity)
+    identities1(1) should be (registry1.identity)
   }
 }

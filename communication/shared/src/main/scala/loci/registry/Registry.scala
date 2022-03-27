@@ -73,6 +73,8 @@ class Registry {
 
   def running: Boolean = !connections.isTerminated
 
+  def identity: String = connections.identity
+
   def terminate(): Unit = connections.terminate()
 
   connections.remoteJoined foreach { remote =>
@@ -82,7 +84,6 @@ class Registry {
   connections.remoteLeft foreach { remote =>
     logging.trace(s"remote left: $remote")
   }
-
 
   private def createChannel(name: String, anchorDefault: String, remote: RemoteRef) =
     Registry.Channel(name, anchorDefault, remote, this)

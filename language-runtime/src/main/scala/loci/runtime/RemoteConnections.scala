@@ -280,7 +280,7 @@ class RemoteConnections(peer: Peer.Signature, ties: Map[Peer.Signature, Peer.Tie
   def constraintViolations: Set[Peer.Signature] = {
     val peerCounts =
       (multiplicities map { case (peer, _) => (peer, 0) }) ++
-      (connections(includePotentials = false) groupBy identity map {
+      (connections(includePotentials = false) groupBy Predef.identity map {
         case (peer, list) => (peer, list.size)
       })
 

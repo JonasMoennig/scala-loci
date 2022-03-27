@@ -60,7 +60,7 @@ trait ConnectionsBase[R, M] {
 
   val receive: Notice.Stream[(R, M)] = doReceive.notice
 
-  private var identity: String = java.util.UUID.randomUUID().toString
+  val identity: String = java.util.UUID.randomUUID().toString
 
   def remotes: List[R] = state.remotes.asScala.toList
 

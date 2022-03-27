@@ -8,6 +8,7 @@ import org.scalatest.matchers.should.Matchers
 
 import scala.collection.mutable
 import scala.collection.Seq
+import scala.collection.mutable.ListBuffer
 import scala.util.Success
 
 @compatibility.nowarn("msg=multiarg infix syntax")
@@ -189,6 +190,12 @@ class RemoteConnectionsSpec extends AnyFlatSpec with Matchers with NoLogging {
     var identity1: String = null
     var identity2: String = null
 
+    val identities_client: ListBuffer[String] = ListBuffer()
+
+    server.remoteJoined foreach { remote =>
+      identities_client.append(remote.identity)
+    }
+
     server.listen(listener, clientSig)
     client0.connect(listener.createConnector(), serverSig) foreach { remote => remote match {
       case Success(remoteRef) => {
@@ -212,10 +219,11 @@ class RemoteConnectionsSpec extends AnyFlatSpec with Matchers with NoLogging {
 
     Seq(client0, client1, node0, node1, dummy, server) foreach { _.terminate() }
 
-    identity1 should be (identity2)
-    identity1 should not be (null)
-    identity2 should not be (null)
-    identity1 should not be ("")
-    identity2 should not be ("")
+    identity1 should be (server.identity)
+    identity2 should be (server.identity)
+
+    identities_client should have size 2
+    identities_client(0) should be (client0.identity)
+    identities_client(1) should be (client0.identity)
   }
 }
