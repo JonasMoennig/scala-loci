@@ -199,27 +199,32 @@ trait ConnectionsBase[R, M] {
    * @param is_listener Flag whether we act as listener or connector
    */
   protected def exchangeIdentities(connection: Connection[ConnectionsBase.Protocol], handler: String => Unit, is_listener: Boolean): Unit = {
-    var remote_identity: String = null
 
     var receive_handler: Notice[_]= null
 
+    var ack_sent = false
     receive_handler = connection.receive foreach {
       message => {
         messaging.Message.deserialize[IdentityMessage.type](message) foreach { received_message =>
           val messaging.Message(_, properties, _) = received_message
-          remote_identity = (properties get IdentityMessage.Identity, properties get IdentityMessage.ACK) match {
+          (properties get IdentityMessage.Identity, properties get IdentityMessage.ACK) match {
             case (Some(Seq(remote_identity)), Some(Seq(ack))) => {
-              if (receive_handler != null)
-                receive_handler.remove()
               if (ack.equals("0")) {
                 sendIdentityMessage(connection, true)
+                ack_sent = true
+              } else if (ack.equals("1")) {
+                if (!ack_sent) {
+                  if (receive_handler != null) {
+                    receive_handler.remove()
+                  }
+                  sendIdentityMessage(connection, true)
+                  ack_sent = true
+                }
+                handler(remote_identity)
               }
-              remote_identity
             }
             case _ => throw new IllegalStateException("Expected identity of peer in packet but received something else")
           }
-
-          handler(remote_identity)
         }
       }
     }
